@@ -230,10 +230,16 @@ static void check_print(bpp_diag_list_t *out, const bpp_line_t *line) {
     if (line->value) sscanf(line->value, "%63s", tok);
     /* The 4.x parser requires 4-5 bits, OR a single token "-1". */
     if (n == 1 && strcmp(tok, "-1") != 0) {
+        /* Auto-fix: preserve the user's first bit, pad with zeros to 5 fields.
+         * This is the safe interpretation: "user wanted samples printed and
+         * nothing else extra". */
+        char new_value[32];
+        snprintf(new_value, sizeof(new_value), "%s 0 0 0 0", tok);
+        char *fix = build_renamed_line(line, "print", new_value);
         emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP010",
              xasprintf("'print' has a single value in this file; BPP 4.x requires 4-5 boolean bits (or -1)."),
-             xasprintf("Replace with e.g. 'print = 1 0 0 0 0' (samples only) or 'print = 1 0 0 0' (samples; no per-locus q matrix)."),
-             NULL, 0);
+             xasprintf("Pad to 5 bits: 'print = %s 0 0 0 0' (samples only). The four extra bits enable per-locus rate, h-scalars, gene trees, and q-matrix output respectively.", tok),
+             fix, line->lineno);
     }
 }
 
@@ -274,10 +280,19 @@ static void check_tauprior(bpp_diag_list_t *out, const bpp_line_t *line) {
     const char *dist = value_starts_with_word(line->value, dist_words);
     int nt = count_tokens(line->value);
     if (!dist && nt == 3) {
+        /* Auto-fix: keep the first two tokens (alpha, beta), drop the third
+         * (which BPP 4.x silently ignores anyway). The user can later add an
+         * explicit 'invgamma'/'gamma' prefix if they want non-default
+         * distribution; the bare-numeric form is still accepted. */
+        char ta[64] = {0}, tb[64] = {0};
+        sscanf(line->value, "%63s %63s", ta, tb);
+        char new_value[160];
+        snprintf(new_value, sizeof(new_value), "%s %s", ta, tb);
+        char *fix = build_renamed_line(line, "tauprior", new_value);
         emit(out, SEV_WARNING, line->lineno, line->val_col, "BPP012",
              xasprintf("'tauprior' has three numeric tokens; the third is ignored in BPP 4.x (it was a Dirichlet alpha in some BPP 3.x builds)."),
-             xasprintf("Drop the third value and add the distribution name: 'tauprior = invgamma a b'."),
-             NULL, 0);
+             xasprintf("Drop the third value. Optionally prefix with 'invgamma' or 'gamma' to make the distribution explicit."),
+             fix, line->lineno);
     }
 }
 
@@ -355,6 +370,202 @@ static int migration_followups(const bpp_line_t *line) {
     sscanf(line->value, "%63s", tok);
     int n = atoi(tok);
     return n > 0 ? n : 0;
+}
+
+/* ---------- completeness check helpers ---------- */
+
+/* Find the first line where `key` is the keyword (case-insensitive).
+ * Returns NULL if the keyword is not set anywhere in the file. */
+static const bpp_line_t *find_set_line(const bpp_file_t *f, const char *key) {
+    for (size_t i = 0; i < f->n; i++) {
+        if (f->lines[i].key && bpp_strieq(f->lines[i].key, key)) {
+            return &f->lines[i];
+        }
+    }
+    return NULL;
+}
+
+/* True if `key` is set, OR if any legacy-renamed predecessor of `key` is set
+ * (since --fix would migrate the legacy entry to the modern name). */
+static int is_effectively_set(const bpp_file_t *f, const char *key) {
+    if (find_set_line(f, key)) return 1;
+    for (int i = 0; ; i++) {
+        const bpp_keyword_t *k = bpp_keyword_at(i);
+        if (!k) break;
+        if ((k->status == KW_RENAMED || k->status == KW_REPARAMETERISED) &&
+            k->replacement && bpp_strieq(k->replacement, key) &&
+            find_set_line(f, k->name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Parse the first whitespace-separated token of value as an int.
+ * Returns 0 if value is NULL or unparseable (callers must handle that
+ * sentinel using context). */
+static int first_int(const char *value) {
+    if (!value) return 0;
+    while (*value && isspace((unsigned char) *value)) value++;
+    return atoi(value);
+}
+
+/* Scan all lines for a substring; case-sensitive. Used to detect the MSC-I
+ * marker '&phi=' that BPP requires inside a species&tree Newick. */
+static int file_contains(const bpp_file_t *f, const char *needle) {
+    for (size_t i = 0; i < f->n; i++) {
+        if (f->lines[i].raw && strstr(f->lines[i].raw, needle)) return 1;
+    }
+    return 0;
+}
+
+static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
+                               bpp_diag_list_t *out, int *errors)
+{
+    kw_mode_t mode = opts->simulate ? MODE_SIM : MODE_INFER;
+
+    /* Track keywords already flagged as required-but-missing so we don't
+     * also emit a misleading BPP103 "default will be used" for them. */
+    const char *flagged[16] = {0};
+    int n_flagged = 0;
+#define FLAG_MISSING(name) do { \
+    if (n_flagged < (int)(sizeof(flagged)/sizeof(flagged[0]))) \
+        flagged[n_flagged++] = (name); \
+} while (0)
+
+    /* --- Must-set keywords (no useful default; BPP aborts if missing) --- */
+    static const char *must_set_infer[] = {
+        "seqfile", "nloci", "nsample", "jobname",
+        "species&tree", "tauprior", "thetaprior",
+        /* 'model' has a JC69 default (bpp.c sets opt_model = BPP_DNA_MODEL_DEFAULT
+         * before load_cfile); BPP103 covers its missing-but-defaulted case. */
+        NULL
+    };
+    static const char *must_set_sim[] = {
+        "seqfile", "treefile", "species&tree", "loci&length",
+        NULL
+    };
+    const char *const *must_set = (mode == MODE_SIM) ? must_set_sim : must_set_infer;
+
+    for (int i = 0; must_set[i]; i++) {
+        if (!is_effectively_set(f, must_set[i])) {
+            emit(out, SEV_ERROR, 0, 0, "BPP100",
+                 xasprintf("required keyword '%s' is not set", must_set[i]),
+                 xasprintf("BPP will refuse to run without '%s' in the control file.", must_set[i]),
+                 NULL, 0);
+            (*errors)++;
+            FLAG_MISSING(must_set[i]);
+        }
+    }
+
+    /* --- Conditional requirements (inference mode only) --- */
+    if (mode == MODE_INFER) {
+        const bpp_line_t *st = find_set_line(f, "species&tree");
+        int species_count = (st && st->value) ? first_int(st->value) : 0;
+
+        if (species_count > 1 && !is_effectively_set(f, "imapfile")) {
+            emit(out, SEV_ERROR, 0, 0, "BPP101",
+                 xasprintf("'imapfile' is required when species count > 1 (species&tree declares %d species)", species_count),
+                 xasprintf("Provide a path to a tab-separated individual->species map."),
+                 NULL, 0);
+            (*errors)++;
+            FLAG_MISSING("imapfile");
+        }
+
+        int sd_on = 0, str_on = 0;
+        const bpp_line_t *sd = find_set_line(f, "speciesdelimitation");
+        if (sd) sd_on = (first_int(sd->value) == 1);
+        const bpp_line_t *str_ = find_set_line(f, "speciestree");
+        if (str_) str_on = (first_int(str_->value) == 1);
+        if ((sd_on || str_on) && !is_effectively_set(f, "speciesmodelprior")) {
+            emit(out, SEV_ERROR, 0, 0, "BPP101",
+                 xasprintf("'speciesmodelprior' is required when %s%s%s is enabled",
+                           sd_on ? "speciesdelimitation" : "",
+                           (sd_on && str_on) ? " or " : "",
+                           str_on ? "speciestree" : ""),
+                 xasprintf("Use 0 (uniform labeled histories) or 1 (uniform rooted trees, recommended default)."),
+                 NULL, 0);
+            (*errors)++;
+            FLAG_MISSING("speciesmodelprior");
+        }
+
+        /* MSC-I introgression: any Newick node has '&phi=' annotation. */
+        if (file_contains(f, "&phi=") && !is_effectively_set(f, "phiprior")) {
+            emit(out, SEV_ERROR, 0, 0, "BPP101",
+                 xasprintf("'phiprior' is required when 'species&tree' contains MSC-I introgression (a Newick node has '&phi=' annotation)"),
+                 xasprintf("Beta(a,b) prior on the introgression probability phi, e.g. 'phiprior = 1 1'."),
+                 NULL, 0);
+            (*errors)++;
+            FLAG_MISSING("phiprior");
+        }
+
+        /* MSC-M migration: wprior required if migration N > 0. */
+        const bpp_line_t *mig = find_set_line(f, "migration");
+        if (mig && first_int(mig->value) > 0 && !is_effectively_set(f, "wprior")) {
+            emit(out, SEV_ERROR, 0, 0, "BPP101",
+                 xasprintf("'wprior' is required when 'migration' specifies one or more connections"),
+                 xasprintf("Provide a Gamma(a,b) prior on w (= 4M/theta), e.g. 'wprior = 2 200'."),
+                 NULL, 0);
+            (*errors)++;
+            FLAG_MISSING("wprior");
+        }
+
+        /* --- Illegal-in-context warnings --- */
+        const bpp_line_t *ph = find_set_line(f, "phase");
+        if (species_count == 1 && ph) {
+            emit(out, SEV_WARNING, ph->lineno, ph->key_col, "BPP102",
+                 xasprintf("'phase' is meaningful only when species count > 1; this file has 1 species"),
+                 NULL, NULL, 0);
+        }
+
+        const bpp_line_t *mdl = find_set_line(f, "model");
+        int is_gtr = 0;
+        if (mdl && mdl->value) {
+            char mtok[32] = {0};
+            sscanf(mdl->value, "%31s", mtok);
+            if (bpp_strieq(mtok, "gtr") || strcmp(mtok, "7") == 0) is_gtr = 1;
+        }
+        if (!is_gtr) {
+            const bpp_line_t *qr = find_set_line(f, "qrates");
+            if (qr) {
+                emit(out, SEV_WARNING, qr->lineno, qr->key_col, "BPP102",
+                     xasprintf("'qrates' is only used with model = GTR; the current model is '%s'",
+                               mdl && mdl->value ? mdl->value : "(unset)"),
+                     NULL, NULL, 0);
+            }
+            const bpp_line_t *bf = find_set_line(f, "basefreqs");
+            if (bf) {
+                emit(out, SEV_WARNING, bf->lineno, bf->key_col, "BPP102",
+                     xasprintf("'basefreqs' is only used with model = GTR; the current model is '%s'",
+                               mdl && mdl->value ? mdl->value : "(unset)"),
+                     NULL, NULL, 0);
+            }
+        }
+    }
+
+    /* --- Missing-with-default warnings (suppressed by --no-defaults) --- */
+    if (opts->show_defaults) {
+        for (int i = 0; ; i++) {
+            const bpp_keyword_t *k = bpp_keyword_at(i);
+            if (!k) break;
+            if (k->status != KW_VALID && k->status != KW_VALID_SIM) continue;
+            if ((k->mode & mode) == 0) continue;
+            if (!k->default_value) continue;
+            if (is_effectively_set(f, k->name)) continue;
+            /* Already flagged as required-but-missing? The BPP100/BPP101
+             * error supersedes; don't double up with a (now wrong) note that
+             * the default will be used. */
+            int suppress = 0;
+            for (int j = 0; j < n_flagged; j++) {
+                if (bpp_strieq(flagged[j], k->name)) { suppress = 1; break; }
+            }
+            if (suppress) continue;
+            emit(out, SEV_WARNING, 0, 0, "BPP103",
+                 xasprintf("'%s' not set; BPP will use default '%s'", k->name, k->default_value),
+                 NULL, NULL, 0);
+        }
+    }
+#undef FLAG_MISSING
 }
 
 /* ---------- main lint pass ---------- */
@@ -524,6 +735,11 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
     }
 
     free(skip);
+
+    /* Completeness pass: flag missing required keywords, illegal-in-context
+     * usages, and (optionally) keywords falling back to BPP's default. */
+    check_completeness(f, opts, out, &errors);
+
     return errors;
 }
 
@@ -553,15 +769,26 @@ void bpp_diag_print(const bpp_diag_list_t *diags, const char *path) {
     for (size_t i = 0; i < diags->n; i++) {
         const bpp_diagnostic_t *d = &diags->items[i];
 
-        /* path:line:col: severity [CODE]: message */
-        fprintf(stderr,
-                "%s%s%s:%s%d%s:%s%d%s: %s%s%s [%s%s%s]: %s\n",
-                c(ANSI_BOLD), path,           c(ANSI_RESET),
-                c(ANSI_BOLD), d->lineno,      c(ANSI_RESET),
-                c(ANSI_BOLD), d->column,      c(ANSI_RESET),
-                c(sev_color(d->severity)), sev_label(d->severity), c(ANSI_RESET),
-                c(ANSI_CYAN), d->code ? d->code : "", c(ANSI_RESET),
-                d->message ? d->message : "");
+        if (d->lineno > 0) {
+            /* path:line:col: severity [CODE]: message */
+            fprintf(stderr,
+                    "%s%s%s:%s%d%s:%s%d%s: %s%s%s [%s%s%s]: %s\n",
+                    c(ANSI_BOLD), path,           c(ANSI_RESET),
+                    c(ANSI_BOLD), d->lineno,      c(ANSI_RESET),
+                    c(ANSI_BOLD), d->column,      c(ANSI_RESET),
+                    c(sev_color(d->severity)), sev_label(d->severity), c(ANSI_RESET),
+                    c(ANSI_CYAN), d->code ? d->code : "", c(ANSI_RESET),
+                    d->message ? d->message : "");
+        } else {
+            /* File-level diagnostic (missing required, missing default).
+             * Omit the :line:col: that wouldn't refer to anything. */
+            fprintf(stderr,
+                    "%s%s%s: %s%s%s [%s%s%s]: %s\n",
+                    c(ANSI_BOLD), path, c(ANSI_RESET),
+                    c(sev_color(d->severity)), sev_label(d->severity), c(ANSI_RESET),
+                    c(ANSI_CYAN), d->code ? d->code : "", c(ANSI_RESET),
+                    d->message ? d->message : "");
+        }
         if (d->suggestion) {
             fprintf(stderr, "  %snote:%s %s%s%s\n",
                     c(ANSI_GREEN), c(ANSI_RESET),
@@ -573,6 +800,96 @@ void bpp_diag_print(const bpp_diag_list_t *diags, const char *path) {
                     c(ANSI_DIM), d->replacement_line, c(ANSI_RESET));
         }
     }
+}
+
+/* ---------- unified diff emission ---------- */
+
+/* Comparator for sorting (lineno, replacement) pairs by lineno. */
+struct diff_entry {
+    int   lineno;
+    const char *new_line;
+};
+
+static int diff_entry_cmp(const void *a, const void *b) {
+    int la = ((const struct diff_entry *) a)->lineno;
+    int lb = ((const struct diff_entry *) b)->lineno;
+    return la - lb;
+}
+
+#define DIFF_CONTEXT 3
+
+int bpp_emit_diff(const bpp_file_t *f, const bpp_diag_list_t *diags,
+                  const char *display_path, FILE *fp)
+{
+    /* 1. Gather (lineno, replacement) entries from diagnostics.
+     *    We keep only the FIRST replacement seen per lineno (in diag order)
+     *    in the rare case multiple diagnostics target the same line. */
+    struct diff_entry *entries = malloc(diags->n * sizeof(*entries));
+    if (!entries) return 0;
+    size_t ne = 0;
+    for (size_t i = 0; i < diags->n; i++) {
+        const bpp_diagnostic_t *d = &diags->items[i];
+        if (!d->replacement_line || d->replacement_lineno <= 0) continue;
+        /* dedup by lineno */
+        int dup = 0;
+        for (size_t k = 0; k < ne; k++) {
+            if (entries[k].lineno == d->replacement_lineno) { dup = 1; break; }
+        }
+        if (dup) continue;
+        entries[ne].lineno   = d->replacement_lineno;
+        entries[ne].new_line = d->replacement_line;
+        ne++;
+    }
+    if (ne == 0) { free(entries); return 0; }
+
+    qsort(entries, ne, sizeof(*entries), diff_entry_cmp);
+
+    /* 2. Group entries into hunks. Two changes belong in the same hunk if
+     *    their context windows would touch or overlap; with C=3 lines of
+     *    context, that means lineno_{i+1} - lineno_i <= 2*C + 1 = 7. */
+    /* Use plain diff -u headers (no a/ b/ git prefix). Works with both
+     * 'patch -p0' from the same directory and a user editor's diff viewer. */
+    fprintf(fp, "--- %s\n+++ %s\n", display_path, display_path);
+
+    int total_lines = (int) f->n;
+    size_t i = 0;
+    int hunks = 0;
+    while (i < ne) {
+        size_t j = i;
+        while (j + 1 < ne && entries[j + 1].lineno - entries[j].lineno <= 2 * DIFF_CONTEXT + 1) {
+            j++;
+        }
+        /* Hunk covers lines [first - C, last + C], clamped to [1, total]. */
+        int first = entries[i].lineno;
+        int last  = entries[j].lineno;
+        int from  = first - DIFF_CONTEXT;
+        int to    = last  + DIFF_CONTEXT;
+        if (from < 1) from = 1;
+        if (to > total_lines) to = total_lines;
+
+        /* Count old/new lines in this hunk (same here: 1-for-1 replacements). */
+        int old_count = to - from + 1;
+        int new_count = old_count;
+        fprintf(fp, "@@ -%d,%d +%d,%d @@\n", from, old_count, from, new_count);
+
+        size_t k = i;
+        for (int ln = from; ln <= to; ln++) {
+            const char *orig = (ln >= 1 && ln <= total_lines && f->lines[ln - 1].raw)
+                               ? f->lines[ln - 1].raw : "";
+            if (k <= j && entries[k].lineno == ln) {
+                fprintf(fp, "-%s\n", orig);
+                fprintf(fp, "+%s\n", entries[k].new_line);
+                k++;
+            } else {
+                fprintf(fp, " %s\n", orig);
+            }
+        }
+        hunks++;
+        i = j + 1;
+    }
+
+    free(entries);
+    return hunks;
 }
 
 /* ---------- autofix application ---------- */

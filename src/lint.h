@@ -1,6 +1,8 @@
 #ifndef BPP_LINT_LINT_H
 #define BPP_LINT_LINT_H
 
+#include <stdio.h>
+
 #include "lex.h"
 #include "keywords.h"
 
@@ -35,8 +37,11 @@ typedef struct {
 
 /* Options that influence linting behavior. */
 typedef struct {
-    int simulate;   /* if non-zero, treat as --simulate control file */
+    int simulate;       /* if non-zero, treat as --simulate control file */
     int verbose;
+    int show_defaults;  /* if non-zero (default), emit BPP103 warnings for
+                         * missing keywords that have a BPP-side default;
+                         * set to 0 by --no-defaults */
 } bpp_lint_opts_t;
 
 /* Lint the file `f` and write diagnostics into `out`. The diagnostic list
@@ -62,6 +67,12 @@ void bpp_diag_print(const bpp_diag_list_t *diags, const char *path);
 /* Apply any auto-fixable diagnostics back into the file's line buffers.
  * Returns the number of replacements made. */
 int  bpp_apply_fixes(bpp_file_t *f, const bpp_diag_list_t *diags);
+
+/* Emit a unified diff to `fp` showing the changes auto-fixable diagnostics
+ * would make. `display_path` is used for the --- / +++ headers. Returns
+ * the number of hunks emitted. */
+int  bpp_emit_diff(const bpp_file_t *f, const bpp_diag_list_t *diags,
+                   const char *display_path, FILE *fp);
 
 /* Write the file out to `path`, reconstructing from line buffers. */
 int  bpp_file_write(const bpp_file_t *f, const char *path);

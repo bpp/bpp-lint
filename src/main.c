@@ -19,11 +19,18 @@ static void print_usage(FILE *out, const char *argv0) {
         "Options:\n"
         "  -f, --fix         Rewrite the file in place after backing up the\n"
         "                    original to <path>.bak. Only auto-applicable\n"
-        "                    fixes (pure renames) are written; semantic\n"
-        "                    changes are reported but require human review.\n"
+        "                    fixes are written; semantic changes are reported\n"
+        "                    but require human review. Mutually exclusive\n"
+        "                    with --diff.\n"
+        "  -d, --diff        Write a unified diff of the auto-applicable\n"
+        "                    fixes to stdout. Apply with 'patch -p0' (or\n"
+        "                    'git apply -p0'). Exits non-zero if any fix\n"
+        "                    is needed, matching gofmt -d convention.\n"
         "  -s, --simulate    Lint as a BPP --simulate control file\n"
         "                    (different keyword set).\n"
         "  -q, --quiet       Print only errors; suppress warnings and notes.\n"
+        "      --no-defaults Suppress informational warnings (BPP103) about\n"
+        "                    optional keywords falling back to BPP's default.\n"
         "      --color=WHEN  Colorize output. WHEN is 'auto' (default), 'always',\n"
         "                    or 'never'. Auto enables color when stderr is a TTY\n"
         "                    and the NO_COLOR environment variable is unset.\n"
@@ -56,9 +63,11 @@ static int filter_quiet(bpp_diag_list_t *list) {
 }
 
 int main(int argc, char **argv) {
-    int do_fix      = 0;
-    int do_simulate = 0;
-    int quiet       = 0;
+    int do_fix       = 0;
+    int do_diff      = 0;
+    int do_simulate  = 0;
+    int quiet        = 0;
+    int show_defaults = 1;
     bpp_color_mode_t color_mode = BPP_COLOR_AUTO;
     const char *path = NULL;
 
@@ -72,10 +81,14 @@ int main(int argc, char **argv) {
             return 0;
         } else if (strcmp(a, "-f") == 0 || strcmp(a, "--fix") == 0) {
             do_fix = 1;
+        } else if (strcmp(a, "-d") == 0 || strcmp(a, "--diff") == 0) {
+            do_diff = 1;
         } else if (strcmp(a, "-s") == 0 || strcmp(a, "--simulate") == 0) {
             do_simulate = 1;
         } else if (strcmp(a, "-q") == 0 || strcmp(a, "--quiet") == 0) {
             quiet = 1;
+        } else if (strcmp(a, "--no-defaults") == 0) {
+            show_defaults = 0;
         } else if (strncmp(a, "--color=", 8) == 0) {
             const char *w = a + 8;
             if      (strcmp(w, "auto")   == 0) color_mode = BPP_COLOR_AUTO;
@@ -107,13 +120,22 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    if (do_fix && do_diff) {
+        fprintf(stderr, "%s: --fix and --diff are mutually exclusive\n", argv[0]);
+        return 2;
+    }
+
     bpp_file_t file = {0};
     if (bpp_file_load(&file, path) != 0) {
         fprintf(stderr, "%s: cannot read '%s': %s\n", argv[0], path, strerror(errno));
         return 2;
     }
 
-    bpp_lint_opts_t opts = { .simulate = do_simulate, .verbose = 0 };
+    bpp_lint_opts_t opts = {
+        .simulate      = do_simulate,
+        .verbose       = 0,
+        .show_defaults = show_defaults,
+    };
     bpp_diag_list_t diags = {0};
     int errors = bpp_lint(&file, &opts, &diags);
 
@@ -122,6 +144,12 @@ int main(int argc, char **argv) {
     bpp_diag_print(&diags, path);
 
     int rc = (errors > 0) ? 1 : 0;
+
+    if (do_diff) {
+        int hunks = bpp_emit_diff(&file, &diags, path, stdout);
+        if (hunks > 0) rc = 1;  /* gofmt -d convention: non-zero when rewrite needed */
+        goto done;
+    }
 
     if (do_fix) {
         int applied = bpp_apply_fixes(&file, &diags);

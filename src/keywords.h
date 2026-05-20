@@ -27,6 +27,7 @@ typedef struct {
     const char  *replacement;   /* new keyword name; NULL if none / unchanged */
     const char  *note;           /* human-readable explanation, may be NULL */
     int          since_version; /* version code where change took effect, e.g. 480 for 4.8.0 */
+    const char  *default_value; /* BPP's default when this keyword is absent; NULL if must-set or N/A */
 } bpp_keyword_t;
 
 /* Look up a keyword by name (case-insensitive). Returns NULL if unknown. */

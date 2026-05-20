@@ -1,0 +1,97 @@
+name: ci
+
+# Build + smoke-test on every push to main and every PR. Mirrors the
+# matrix used by release.yml so platform regressions are caught before
+# tag time, but skips the archive/release steps.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs when new commits land on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            bin: ./bpp-lint
+          - target: macos-x86_64
+            os: macos-13
+            bin: ./bpp-lint
+          - target: macos-arm64
+            os: macos-14
+            bin: ./bpp-lint
+          - target: windows-x86_64
+            os: windows-latest
+            bin: ./bpp-lint.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (Windows only)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+
+      - name: Build (Unix)
+        if: matrix.os != 'windows-latest'
+        run: make
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
+        run: make BIN=bpp-lint.exe
+
+      # Smoke tests: invoke the binary on each fixture and assert the
+      # documented exit code. modern-4x should be clean (exit 0); the
+      # other two have intentional errors (exit 1). We also check that
+      # the cross-checks fixture fires the expected BPP12x codes.
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="${{ matrix.bin }}"
+
+          echo "::group::--version / --list-codes / --explain"
+          "$BIN" --version
+          "$BIN" --list-codes | head -5
+          "$BIN" --explain 020 | head -3
+          echo "::endgroup::"
+
+          echo "::group::modern-4x.bpp.ctl should exit 0"
+          "$BIN" --color=never examples/modern-4x.bpp.ctl
+          echo "::endgroup::"
+
+          echo "::group::legacy-3x.bpp.ctl should exit 1"
+          if "$BIN" --color=never examples/legacy-3x.bpp.ctl; then
+            echo "expected exit 1 but got 0" >&2
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::cross-checks.bpp.ctl should fire BPP120/122/123/124"
+          out=$("$BIN" --color=never --codes --no-defaults examples/cross-checks.bpp.ctl 2>&1 || true)
+          echo "$out"
+          for code in 120 122 123 124; do
+            if ! echo "$out" | grep -q "\[$code\]"; then
+              echo "expected diagnostic [$code] not found" >&2
+              exit 1
+            fi
+          done
+          echo "::endgroup::"

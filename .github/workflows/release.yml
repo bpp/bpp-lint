@@ -131,3 +131,25 @@ jobs:
             dist/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  bump-homebrew:
+    name: Bump Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    # Skip pre-release tags (anything with a '-', e.g. v0.2.0-rc1).
+    if: ${{ !contains(github.ref_name, '-') }}
+    steps:
+      - name: Update bpp/homebrew-tap
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: bpp-lint
+          formula-path: Formula/bpp-lint.rb
+          homebrew-tap: bpp/homebrew-tap
+          tag-name: ${{ github.ref_name }}
+          download-url: https://github.com/bpp/bpp-lint/archive/refs/tags/${{ github.ref_name }}.tar.gz
+          commit-message: |
+            bpp-lint {{version}}
+
+            Created by bpp/bpp-lint release workflow.
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

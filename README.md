@@ -5,7 +5,20 @@ A linter for [BPP](https://github.com/bpp/bpp) (Bayesian Phylogenetics
 and stylistic problems, auto-fixes files written for BPP 2.x / 3.x, and
 sanity-checks priors against the underlying sequence data.
 
-## Build
+## Install
+
+### Homebrew (macOS, Linux)
+
+```
+brew install bpp/tap/bpp-lint
+```
+
+### Prebuilt binaries
+
+Download a tarball / zip for your platform from the
+[releases](https://github.com/bpp/bpp-lint/releases) page.
+
+### Build from source
 
 ```
 make

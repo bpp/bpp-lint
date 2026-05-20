@@ -1,0 +1,119 @@
+name: release
+
+# Triggered by pushing a tag matching v*, e.g. `git tag v0.2.0 && git push --tags`.
+# Builds bpp-lint on native GitHub runners for four targets, archives the
+# binary together with README/LICENSE/examples, computes SHA256 checksums,
+# and publishes a GitHub Release. Pre-release tags (containing a '-', e.g.
+# v0.2.0-rc1) are auto-marked as pre-releases by softprops/action-gh-release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            archive_ext: tar.gz
+            bin: bpp-lint
+          - target: macos-x86_64
+            os: macos-13
+            archive_ext: tar.gz
+            bin: bpp-lint
+          - target: macos-arm64
+            os: macos-14
+            archive_ext: tar.gz
+            bin: bpp-lint
+          - target: windows-x86_64
+            os: windows-latest
+            archive_ext: zip
+            bin: bpp-lint.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (Windows only)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+
+      - name: Build (Unix)
+        if: matrix.os != 'windows-latest'
+        run: make
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
+        run: make BIN=bpp-lint.exe
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGE="bpp-lint-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$STAGE"
+          cp "${{ matrix.bin }}" "$STAGE/"
+          cp README.md LICENSE "$STAGE/"
+          cp -r examples "$STAGE/"
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Archive (tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: tar -czf "${STAGE}.tar.gz" "$STAGE"
+
+      - name: Archive (zip)
+        if: matrix.archive_ext == 'zip'
+        shell: bash
+        run: 7z a "${STAGE}.zip" "$STAGE"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: bpp-lint-*.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute SHA256 checksums
+        run: |
+          cd dist
+          sha256sum bpp-lint-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/bpp-lint-*
+            dist/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true

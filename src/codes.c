@@ -147,6 +147,65 @@ static const bpp_code_doc_t codes[] = {
       "between-species coalescent variance when no within-species variation\n"
       "is observed. See PRIOR_CALCULATION_NOTES.md in the bpps repo." },
 
+    /* 12x: cross-keyword consistency (mirrors check_validity() in BPP 4.8.7
+     *      cfile.c, plus a few rules documented only in the manual). */
+    { "120",
+      "speciesmodelprior in {2, 3} is invalid in A10 (delimitation-only).",
+      "When speciesdelimitation=1 and speciestree=0 (analysis A10), only\n"
+      "speciesmodelprior = 0 or 1 are accepted. Values 2 (uniformSLH) and 3\n"
+      "(uniformSRooted) weight delimitations by labeled-history or rooted-tree\n"
+      "topology counts and are only meaningful when tree topologies are also\n"
+      "being explored (A11). Source: bpp-4.8.7 cfile.c:2802-2804." },
+
+    { "121",
+      "speciesmodelprior in {2, 3} is invalid in A01 (tree-only).",
+      "When speciestree=1 and speciesdelimitation=0 (analysis A01), only\n"
+      "speciesmodelprior = 0 or 1 are documented as legal (BPP 4.x manual §14).\n"
+      "Values 2 and 3 are intended for joint A11 analyses where both delim and\n"
+      "tree are being inferred. Source: bpp-4-manual.md lines 1255-1260." },
+
+    { "122",
+      "bayesfactorbeta set to a non-default value with usedata = 0.",
+      "BayesFactorBeta scales the data likelihood for marginal-likelihood\n"
+      "estimation; with usedata = 0 there is no likelihood term to scale and\n"
+      "BPP aborts the run. Either restore bayesfactorbeta to its default of 1\n"
+      "or set usedata = 1. Source: bpp-4.8.7 cfile.c:2724-2725." },
+
+    { "123",
+      "cleandata = 1 with at least one unphased species (phase has '1').",
+      "cleandata = 1 strips ambiguity characters from sequences before the\n"
+      "likelihood calculation. Unphased diploid species rely on heterozygote\n"
+      "ambiguity codes; the two settings cannot coexist. Either set\n"
+      "cleandata = 0 or clear the offending '1' bit(s) in the phase line.\n"
+      "Source: bpp-4.8.7 cfile.c:2870-2872." },
+
+    { "124",
+      "datefile (tip dating) used together with species delimitation.",
+      "BPP does not currently support tip-dating combined with species\n"
+      "delimitation (METHOD_10 or METHOD_11). Remove the datefile or set\n"
+      "speciesdelimitation = 0. Source: bpp-4.8.7 cfile.c:2878-2879." },
+
+    { "125",
+      "datefile is set but locusrate is not '3 ...'.",
+      "Tip-dating requires the locusrate = 3 parameterisation (all loci share\n"
+      "the same mutation rate, estimated from sample ages). Any other value\n"
+      "of locusrate (or leaving it at its default of 0) makes the dates\n"
+      "unusable. Source: bpp-4.8.7 cfile.c:2881-2882; manual line 2151." },
+
+    { "126",
+      "locusrate = 3 ... is set but no datefile is provided.",
+      "The 'locusrate = 3 a b' parameterisation exists specifically for\n"
+      "tip-dating analyses, where 'a' and 'b' are the prior parameters on the\n"
+      "shared mutation rate inferred from the sample ages. Without a datefile,\n"
+      "the rate has nothing to be calibrated against. Source: BPP 4.x manual\n"
+      "line 1771." },
+
+    { "127",
+      "migration block is incompatible with speciestree = 1.",
+      "Species tree estimation under the MSC-M model is not implemented in\n"
+      "BPP 4.x. If you need migration, fix the species tree (speciestree = 0).\n"
+      "Source: bpp-4.8.7 cfile.c:2884-2887." },
+
     { "111",
       "tauprior is far too diffuse vs the data upper bound (--check-priors).",
       "Triggered when --check-priors is passed and the existing tauprior's\n"

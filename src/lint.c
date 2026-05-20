@@ -578,6 +578,187 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
 #undef FLAG_MISSING
 }
 
+/* ---------- cross-keyword consistency rules ----------
+ *
+ * Each rule below mirrors a check_validity() guard in BPP 4.8.7's cfile.c
+ * (or a documented constraint in the BPP manual that the parser does not
+ * itself enforce). They run after the per-keyword and completeness passes
+ * and after the rename/removal diagnostics for legacy aliases, so each rule
+ * only inspects modern keyword names; legacy users will see the BPP020
+ * rename first, fix it, and then re-lint to surface the cross-keyword
+ * incompatibility.
+ *
+ * To add a rule:
+ *   1. Document a new diagnostic code in codes.c.
+ *   2. Implement a rule_xxx() function below (emit directly, choose its
+ *      own severity and message).
+ *   3. Append a row to cross_rules[].
+ */
+
+/* True if any whitespace-separated token in `value` is the literal "1". */
+static int phase_has_unphased_bit(const char *value) {
+    if (!value) return 0;
+    const char *p = value;
+    while (*p) {
+        while (*p && isspace((unsigned char) *p)) p++;
+        if (!*p || *p == '*' || *p == '#') break;
+        const char *tok = p;
+        while (*p && !isspace((unsigned char) *p) && *p != '*' && *p != '#') p++;
+        if (p - tok == 1 && *tok == '1') return 1;
+    }
+    return 0;
+}
+
+/* R1a: speciesdelimitation=1 && speciestree=0 (METHOD_10) forbids
+ * speciesmodelprior ∈ {2, 3}. Source: cfile.c:2802-2804. */
+static void rule_smprior_delim_only(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *sd  = find_set_line(f, "speciesdelimitation");
+    const bpp_line_t *st  = find_set_line(f, "speciestree");
+    const bpp_line_t *smp = find_set_line(f, "speciesmodelprior");
+    if (!sd || !smp) return;
+    int sd_v  = first_int(sd->value);
+    int st_v  = st ? first_int(st->value) : 0;
+    int smp_v = first_int(smp->value);
+    if (sd_v != 1 || st_v != 0) return;
+    if (smp_v != 2 && smp_v != 3) return;
+    emit(out, SEV_ERROR, smp->lineno, smp->val_col, "BPP120",
+         xasprintf("'speciesmodelprior = %d' is invalid in A10 (speciesdelimitation=1, speciestree=0)", smp_v),
+         xasprintf("only speciesmodelprior = 0 or 1 are allowed in delimitation-only runs"),
+         NULL, 0);
+    (*errors)++;
+}
+
+/* R1b: speciestree=1 && speciesdelimitation=0 (METHOD_01) forbids
+ * speciesmodelprior ∈ {2, 3}. Source: manual §14 lines 1255-1260. */
+static void rule_smprior_tree_only(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *sd  = find_set_line(f, "speciesdelimitation");
+    const bpp_line_t *st  = find_set_line(f, "speciestree");
+    const bpp_line_t *smp = find_set_line(f, "speciesmodelprior");
+    if (!st || !smp) return;
+    int sd_v  = sd ? first_int(sd->value) : 0;
+    int st_v  = first_int(st->value);
+    int smp_v = first_int(smp->value);
+    if (st_v != 1 || sd_v != 0) return;
+    if (smp_v != 2 && smp_v != 3) return;
+    emit(out, SEV_ERROR, smp->lineno, smp->val_col, "BPP121",
+         xasprintf("'speciesmodelprior = %d' is invalid in A01 (speciestree=1, speciesdelimitation=0)", smp_v),
+         xasprintf("only speciesmodelprior = 0 or 1 are allowed in species-tree-only runs"),
+         NULL, 0);
+    (*errors)++;
+}
+
+/* R2: usedata=0 forbids non-default bayesfactorbeta. Source: cfile.c:2724-2725. */
+static void rule_bayesfactor_needs_data(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *ud = find_set_line(f, "usedata");
+    const bpp_line_t *bf = find_set_line(f, "bayesfactorbeta");
+    if (!ud || !bf) return;
+    if (first_int(ud->value) != 0) return;
+    if (!bf->value) return;
+    double v = 0;
+    if (!parse_double(bf->value, &v)) return;
+    if (v == 1.0) return;
+    emit(out, SEV_ERROR, bf->lineno, bf->val_col, "BPP122",
+         xasprintf("'bayesfactorbeta = %g' is incompatible with 'usedata = 0'", v),
+         xasprintf("BPP rejects this combination; set usedata=1 or restore bayesfactorbeta to 1"),
+         NULL, 0);
+    (*errors)++;
+}
+
+/* R3: cleandata=1 forbids any unphased species (phase has any '1' bit).
+ * Source: cfile.c:2870-2872. */
+static void rule_cleandata_phase(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *cd = find_set_line(f, "cleandata");
+    if (!cd || first_int(cd->value) != 1) return;
+    const bpp_line_t *ph = find_set_line(f, "phase");
+    if (!ph) ph = find_set_line(f, "diploid");
+    if (!ph || !phase_has_unphased_bit(ph->value)) return;
+    emit(out, SEV_ERROR, cd->lineno, cd->val_col, "BPP123",
+         xasprintf("'cleandata = 1' is incompatible with phasing ('%s' has a '1' bit on line %d)",
+                   ph->key_orig ? ph->key_orig : "phase", ph->lineno),
+         xasprintf("set cleandata = 0 when any species is unphased, or remove the unphased flag"),
+         NULL, 0);
+    (*errors)++;
+}
+
+/* R4: datefile (tip dating) forbids species delimitation. Source: cfile.c:2878-2879. */
+static void rule_datefile_no_delim(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *df = find_set_line(f, "datefile");
+    const bpp_line_t *sd = find_set_line(f, "speciesdelimitation");
+    if (!df || !sd) return;
+    if (first_int(sd->value) != 1) return;
+    emit(out, SEV_ERROR, df->lineno, df->key_col, "BPP124",
+         xasprintf("'datefile' (tip dating) is incompatible with 'speciesdelimitation = 1'"),
+         xasprintf("BPP rejects tip-dating combined with delimitation; pick one"),
+         NULL, 0);
+    (*errors)++;
+}
+
+/* R5a: datefile requires locusrate=3. Source: cfile.c:2881-2882. */
+static void rule_datefile_locusrate3(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *df = find_set_line(f, "datefile");
+    if (!df) return;
+    const bpp_line_t *lr = find_set_line(f, "locusrate");
+    int lr_v = lr ? first_int(lr->value) : 0;
+    if (lr_v == 3) return;
+    emit(out, SEV_ERROR, df->lineno, df->key_col, "BPP125",
+         xasprintf("'datefile' requires 'locusrate = 3 ...' (locusrate is %d)", lr_v),
+         xasprintf("tip dating uses the per-locus rate parameterisation 'locusrate = 3 a b'"),
+         NULL, 0);
+    (*errors)++;
+}
+
+/* R5b: locusrate=3 requires datefile. Source: manual line 1771. */
+static void rule_locusrate3_needs_datefile(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *lr = find_set_line(f, "locusrate");
+    if (!lr || first_int(lr->value) != 3) return;
+    if (find_set_line(f, "datefile")) return;
+    emit(out, SEV_ERROR, lr->lineno, lr->key_col, "BPP126",
+         xasprintf("'locusrate = 3 ...' requires 'datefile' to be set"),
+         xasprintf("the tip-dating locusrate parameterisation expects a file of sample ages"),
+         NULL, 0);
+    (*errors)++;
+}
+
+/* R6: migration is incompatible with species-tree estimation. Source: cfile.c:2884-2887. */
+static void rule_migration_no_speciestree(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *mg = find_set_line(f, "migration");
+    const bpp_line_t *st = find_set_line(f, "speciestree");
+    if (!mg || !st) return;
+    if (first_int(mg->value) <= 0) return;
+    if (first_int(st->value) != 1) return;
+    emit(out, SEV_ERROR, mg->lineno, mg->key_col, "BPP127",
+         xasprintf("'migration' (MSC-M) is incompatible with 'speciestree = 1'"),
+         xasprintf("species tree estimation under MSC-M is not implemented; set speciestree = 0"),
+         NULL, 0);
+    (*errors)++;
+}
+
+typedef void (*cross_check_fn)(const bpp_file_t *f, bpp_diag_list_t *out, int *errors);
+
+static const struct {
+    const char    *code;   /* paired with the code emitted by fn; for grep/--explain */
+    cross_check_fn fn;
+} cross_rules[] = {
+    { "BPP120", rule_smprior_delim_only },
+    { "BPP121", rule_smprior_tree_only },
+    { "BPP122", rule_bayesfactor_needs_data },
+    { "BPP123", rule_cleandata_phase },
+    { "BPP124", rule_datefile_no_delim },
+    { "BPP125", rule_datefile_locusrate3 },
+    { "BPP126", rule_locusrate3_needs_datefile },
+    { "BPP127", rule_migration_no_speciestree },
+    { NULL, NULL }
+};
+
+static void check_cross_keyword(const bpp_file_t *f, const bpp_lint_opts_t *opts,
+                                bpp_diag_list_t *out, int *errors)
+{
+    if (opts->simulate) return;
+    for (int i = 0; cross_rules[i].fn; i++) {
+        cross_rules[i].fn(f, out, errors);
+    }
+}
+
 /* ---------- main lint pass ---------- */
 
 int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
@@ -746,6 +927,10 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
     /* Completeness pass: flag missing required keywords, illegal-in-context
      * usages, and (optionally) keywords falling back to BPP's default. */
     check_completeness(f, opts, out, &errors);
+
+    /* Cross-keyword consistency: incompatible value combinations between
+     * keywords that BPP's parser rejects via check_validity() at run time. */
+    check_cross_keyword(f, opts, out, &errors);
 
     return errors;
 }

@@ -6,11 +6,47 @@
 
 #include <ctype.h>
 #include <strings.h>
+#include <unistd.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* ---------- color output ---------- */
+
+/* Resolved color state: 0 = no color, 1 = color. Set by bpp_color_set. */
+static int color_on = 0;
+
+/* SGR sequences. Kept minimal and standard. */
+#define ANSI_RESET   "\033[0m"
+#define ANSI_BOLD    "\033[1m"
+#define ANSI_DIM     "\033[2m"
+#define ANSI_RED     "\033[31m"
+#define ANSI_GREEN   "\033[32m"
+#define ANSI_YELLOW  "\033[33m"
+#define ANSI_BLUE    "\033[34m"
+#define ANSI_CYAN    "\033[36m"
+#define ANSI_BRED    "\033[1;31m"
+#define ANSI_BYELLOW "\033[1;33m"
+
+static const char *c(const char *seq) { return color_on ? seq : ""; }
+
+void bpp_color_set(bpp_color_mode_t mode) {
+    switch (mode) {
+    case BPP_COLOR_ALWAYS: color_on = 1; return;
+    case BPP_COLOR_NEVER:  color_on = 0; return;
+    case BPP_COLOR_AUTO:
+    default: {
+        const char *nc = getenv("NO_COLOR");
+        if (nc && *nc) { color_on = 0; return; }
+        const char *term = getenv("TERM");
+        if (term && strcmp(term, "dumb") == 0) { color_on = 0; return; }
+        color_on = isatty(fileno(stderr)) ? 1 : 0;
+        return;
+    }
+    }
+}
 
 /* ---------- diagnostic list management ---------- */
 
@@ -502,20 +538,39 @@ static const char *sev_label(bpp_severity_t s) {
     return "?";
 }
 
+/* Return SGR color for a severity level. */
+static const char *sev_color(bpp_severity_t s) {
+    switch (s) {
+    case SEV_ERROR:   return ANSI_BRED;
+    case SEV_WARNING: return ANSI_BYELLOW;
+    case SEV_INFO:    return ANSI_BLUE;
+    }
+    return "";
+}
+
 void bpp_diag_print(const bpp_diag_list_t *diags, const char *path) {
     if (!diags) return;
     for (size_t i = 0; i < diags->n; i++) {
         const bpp_diagnostic_t *d = &diags->items[i];
-        fprintf(stderr, "%s:%d:%d: %s [%s]: %s\n",
-                path, d->lineno, d->column,
-                sev_label(d->severity),
-                d->code ? d->code : "",
+
+        /* path:line:col: severity [CODE]: message */
+        fprintf(stderr,
+                "%s%s%s:%s%d%s:%s%d%s: %s%s%s [%s%s%s]: %s\n",
+                c(ANSI_BOLD), path,           c(ANSI_RESET),
+                c(ANSI_BOLD), d->lineno,      c(ANSI_RESET),
+                c(ANSI_BOLD), d->column,      c(ANSI_RESET),
+                c(sev_color(d->severity)), sev_label(d->severity), c(ANSI_RESET),
+                c(ANSI_CYAN), d->code ? d->code : "", c(ANSI_RESET),
                 d->message ? d->message : "");
         if (d->suggestion) {
-            fprintf(stderr, "  note: %s\n", d->suggestion);
+            fprintf(stderr, "  %snote:%s %s%s%s\n",
+                    c(ANSI_GREEN), c(ANSI_RESET),
+                    c(ANSI_DIM), d->suggestion, c(ANSI_RESET));
         }
         if (d->replacement_line) {
-            fprintf(stderr, "  fix:  %s\n", d->replacement_line);
+            fprintf(stderr, "  %sfix:%s  %s%s%s\n",
+                    c(ANSI_GREEN), c(ANSI_RESET),
+                    c(ANSI_DIM), d->replacement_line, c(ANSI_RESET));
         }
     }
 }

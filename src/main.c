@@ -24,6 +24,9 @@ static void print_usage(FILE *out, const char *argv0) {
         "  -s, --simulate    Lint as a BPP --simulate control file\n"
         "                    (different keyword set).\n"
         "  -q, --quiet       Print only errors; suppress warnings and notes.\n"
+        "      --color=WHEN  Colorize output. WHEN is 'auto' (default), 'always',\n"
+        "                    or 'never'. Auto enables color when stderr is a TTY\n"
+        "                    and the NO_COLOR environment variable is unset.\n"
         "      --version     Print version and exit.\n"
         "  -h, --help        Show this help.\n"
         "\n"
@@ -56,6 +59,7 @@ int main(int argc, char **argv) {
     int do_fix      = 0;
     int do_simulate = 0;
     int quiet       = 0;
+    bpp_color_mode_t color_mode = BPP_COLOR_AUTO;
     const char *path = NULL;
 
     for (int i = 1; i < argc; i++) {
@@ -72,6 +76,17 @@ int main(int argc, char **argv) {
             do_simulate = 1;
         } else if (strcmp(a, "-q") == 0 || strcmp(a, "--quiet") == 0) {
             quiet = 1;
+        } else if (strncmp(a, "--color=", 8) == 0) {
+            const char *w = a + 8;
+            if      (strcmp(w, "auto")   == 0) color_mode = BPP_COLOR_AUTO;
+            else if (strcmp(w, "always") == 0) color_mode = BPP_COLOR_ALWAYS;
+            else if (strcmp(w, "never")  == 0) color_mode = BPP_COLOR_NEVER;
+            else {
+                fprintf(stderr, "%s: --color value must be auto|always|never (got '%s')\n", argv[0], w);
+                return 2;
+            }
+        } else if (strcmp(a, "--color") == 0) {
+            color_mode = BPP_COLOR_ALWAYS;
         } else if (a[0] == '-' && a[1] != '\0') {
             fprintf(stderr, "%s: unknown option '%s'\n", argv[0], a);
             print_usage(stderr, argv[0]);
@@ -102,6 +117,7 @@ int main(int argc, char **argv) {
     bpp_diag_list_t diags = {0};
     int errors = bpp_lint(&file, &opts, &diags);
 
+    bpp_color_set(color_mode);
     if (quiet) filter_quiet(&diags);
     bpp_diag_print(&diags, path);
 

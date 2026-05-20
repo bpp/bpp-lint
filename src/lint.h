@@ -45,6 +45,17 @@ typedef struct {
 int  bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
               bpp_diag_list_t *out);
 
+/* Color output mode. AUTO enables color when stderr is a TTY and the
+ * NO_COLOR environment variable is not set. */
+typedef enum {
+    BPP_COLOR_AUTO   = 0,
+    BPP_COLOR_NEVER  = 1,
+    BPP_COLOR_ALWAYS = 2
+} bpp_color_mode_t;
+
+/* Set the color mode for subsequent calls to bpp_diag_print. */
+void bpp_color_set(bpp_color_mode_t mode);
+
 /* Print a diagnostic list to stderr in compiler-style format. */
 void bpp_diag_print(const bpp_diag_list_t *diags, const char *path);
 

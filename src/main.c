@@ -29,8 +29,10 @@ static void print_usage(FILE *out, const char *argv0) {
         "  -s, --simulate    Lint as a BPP --simulate control file\n"
         "                    (different keyword set).\n"
         "  -q, --quiet       Print only errors; suppress warnings and notes.\n"
-        "      --no-defaults Suppress informational warnings (BPP103) about\n"
-        "                    optional keywords falling back to BPP's default.\n"
+        "      --no-defaults Suppress informational warnings about optional\n"
+        "                    keywords falling back to BPP's default (code 103).\n"
+        "      --codes       Show diagnostic codes (e.g. '[020]') in output.\n"
+        "                    Off by default; useful when filtering with grep.\n"
         "      --color=WHEN  Colorize output. WHEN is 'auto' (default), 'always',\n"
         "                    or 'never'. Auto enables color when stderr is a TTY\n"
         "                    and the NO_COLOR environment variable is unset.\n"
@@ -68,6 +70,7 @@ int main(int argc, char **argv) {
     int do_simulate  = 0;
     int quiet        = 0;
     int show_defaults = 1;
+    int show_codes   = 0;
     bpp_color_mode_t color_mode = BPP_COLOR_AUTO;
     const char *path = NULL;
 
@@ -89,6 +92,8 @@ int main(int argc, char **argv) {
             quiet = 1;
         } else if (strcmp(a, "--no-defaults") == 0) {
             show_defaults = 0;
+        } else if (strcmp(a, "--codes") == 0) {
+            show_codes = 1;
         } else if (strncmp(a, "--color=", 8) == 0) {
             const char *w = a + 8;
             if      (strcmp(w, "auto")   == 0) color_mode = BPP_COLOR_AUTO;
@@ -140,6 +145,7 @@ int main(int argc, char **argv) {
     int errors = bpp_lint(&file, &opts, &diags);
 
     bpp_color_set(color_mode);
+    bpp_codes_set(show_codes);
     if (quiet) filter_quiet(&diags);
     bpp_diag_print(&diags, path);
 

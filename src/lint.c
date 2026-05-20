@@ -18,6 +18,23 @@
 /* Resolved color state: 0 = no color, 1 = color. Set by bpp_color_set. */
 static int color_on = 0;
 
+/* Whether to display [CODE] tags. Default 0 (suppressed). */
+static int codes_on = 0;
+
+void bpp_codes_set(int show) { codes_on = !!show; }
+
+/* Strip a 'BPP' prefix from a stored code so the printer can emit it as
+ * '[103]' rather than '[BPP103]' (the BPP prefix is redundant). */
+static const char *short_code(const char *code) {
+    if (!code) return "";
+    if ((code[0] == 'B' || code[0] == 'b') &&
+        (code[1] == 'P' || code[1] == 'p') &&
+        (code[2] == 'P' || code[2] == 'p')) {
+        return code + 3;
+    }
+    return code;
+}
+
 /* SGR sequences. Kept minimal and standard. */
 #define ANSI_RESET   "\033[0m"
 #define ANSI_BOLD    "\033[1m"
@@ -237,8 +254,8 @@ static void check_print(bpp_diag_list_t *out, const bpp_line_t *line) {
         snprintf(new_value, sizeof(new_value), "%s 0 0 0 0", tok);
         char *fix = build_renamed_line(line, "print", new_value);
         emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP010",
-             xasprintf("'print' has a single value in this file; BPP 4.x requires 4-5 boolean bits (or -1)."),
-             xasprintf("Pad to 5 bits: 'print = %s 0 0 0 0' (samples only). The four extra bits enable per-locus rate, h-scalars, gene trees, and q-matrix output respectively.", tok),
+             xasprintf("'print' has one bit; 4.x requires 4-5 (or -1)"),
+             xasprintf("bits are: samples, locusrate, hscalars, genetrees, qmatrix"),
              fix, line->lineno);
     }
 }
@@ -256,8 +273,8 @@ static void check_thetaprior(bpp_diag_list_t *out, const bpp_line_t *line) {
         double alpha;
         if (parse_double(ta, &alpha) && alpha <= 2.0) {
             emit(out, SEV_WARNING, line->lineno, line->val_col, "BPP011",
-                 xasprintf("'thetaprior' bare-numeric form is treated as invgamma; BPP v4.8.2+ rejects invgamma when alpha <= 2 (alpha=%g here).", alpha),
-                 xasprintf("Either use 'thetaprior = gamma %s ...' or choose alpha > 2 for invgamma.", ta),
+                 xasprintf("'thetaprior' alpha=%g with implicit invgamma; v4.8.2+ requires alpha > 2", alpha),
+                 xasprintf("use 'thetaprior = gamma %s ...' or pick alpha > 2", ta),
                  NULL, 0);
         }
     } else if (dist && bpp_strieq(dist, "invgamma")) {
@@ -267,9 +284,8 @@ static void check_thetaprior(bpp_diag_list_t *out, const bpp_line_t *line) {
         double alpha;
         if (parse_double(ta, &alpha) && alpha <= 2.0) {
             emit(out, SEV_WARNING, line->lineno, line->val_col, "BPP011",
-                 xasprintf("'thetaprior = invgamma %s ...': BPP v4.8.2+ requires alpha > 2.", ta),
-                 xasprintf("Use alpha > 2, or switch to a gamma prior."),
-                 NULL, 0);
+                 xasprintf("'thetaprior = invgamma %s ...': v4.8.2+ requires alpha > 2", ta),
+                 NULL, NULL, 0);
         }
     }
 }
@@ -290,8 +306,8 @@ static void check_tauprior(bpp_diag_list_t *out, const bpp_line_t *line) {
         snprintf(new_value, sizeof(new_value), "%s %s", ta, tb);
         char *fix = build_renamed_line(line, "tauprior", new_value);
         emit(out, SEV_WARNING, line->lineno, line->val_col, "BPP012",
-             xasprintf("'tauprior' has three numeric tokens; the third is ignored in BPP 4.x (it was a Dirichlet alpha in some BPP 3.x builds)."),
-             xasprintf("Drop the third value. Optionally prefix with 'invgamma' or 'gamma' to make the distribution explicit."),
+             xasprintf("'tauprior' has three tokens; the third is ignored in 4.x"),
+             NULL,
              fix, line->lineno);
     }
 }
@@ -326,8 +342,8 @@ static void check_finetune_positional(bpp_diag_list_t *out, const bpp_line_t *li
     }
     if (has_postnum_colon && !has_kv) {
         emit(out, SEV_WARNING, line->lineno, line->val_col, "BPP013",
-             xasprintf("'finetune' uses the legacy positional format ('1: f f f ...'); since BPP v4.8.1 the values are given as 'key:value' pairs."),
-             xasprintf("Rewrite as e.g. 'finetune = 1 Gage:5 Gspr:0.001 tau:0.001 mix:0.3 lrht:0.33'. See the BPP manual for the full key list."),
+             xasprintf("'finetune' uses pre-v4.8.1 positional form; expects 'key:value' pairs"),
+             xasprintf("e.g. 'finetune = 1 Gage:5 Gspr:0.001 tau:0.001 mix:0.3 lrht:0.33'"),
              NULL, 0);
     }
 }
@@ -342,8 +358,8 @@ static void check_locusrate_legacy(bpp_diag_list_t *out, const bpp_line_t *line)
         sscanf(line->value, "%63s", first);
         if (strcmp(first, "1") == 0) {
             emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP014",
-                 xasprintf("'locusrate = 1 <alpha>' is the pre-v4.1.4 form. BPP 4.1.4+ requires 'locusrate = 1 a_mubar b_mubar a_mui [prior]'."),
-                 xasprintf("Replace with the full 4-argument form: 'locusrate = 1 <a_mubar> <b_mubar> <a_mui> [DIR|IID]'."),
+                 xasprintf("'locusrate = 1 <alpha>' is the pre-v4.1.4 form"),
+                 xasprintf("v4.1.4+ expects 'locusrate = 1 a_mubar b_mubar a_mui [DIR|IID]'"),
                  NULL, 0);
         }
     }
@@ -450,9 +466,8 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
     for (int i = 0; must_set[i]; i++) {
         if (!is_effectively_set(f, must_set[i])) {
             emit(out, SEV_ERROR, 0, 0, "BPP100",
-                 xasprintf("required keyword '%s' is not set", must_set[i]),
-                 xasprintf("BPP will refuse to run without '%s' in the control file.", must_set[i]),
-                 NULL, 0);
+                 xasprintf("'%s' is required", must_set[i]),
+                 NULL, NULL, 0);
             (*errors)++;
             FLAG_MISSING(must_set[i]);
         }
@@ -465,9 +480,8 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
 
         if (species_count > 1 && !is_effectively_set(f, "imapfile")) {
             emit(out, SEV_ERROR, 0, 0, "BPP101",
-                 xasprintf("'imapfile' is required when species count > 1 (species&tree declares %d species)", species_count),
-                 xasprintf("Provide a path to a tab-separated individual->species map."),
-                 NULL, 0);
+                 xasprintf("'imapfile' is required (species count = %d)", species_count),
+                 NULL, NULL, 0);
             (*errors)++;
             FLAG_MISSING("imapfile");
         }
@@ -479,12 +493,11 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
         if (str_) str_on = (first_int(str_->value) == 1);
         if ((sd_on || str_on) && !is_effectively_set(f, "speciesmodelprior")) {
             emit(out, SEV_ERROR, 0, 0, "BPP101",
-                 xasprintf("'speciesmodelprior' is required when %s%s%s is enabled",
+                 xasprintf("'speciesmodelprior' is required (%s%s%s = 1)",
                            sd_on ? "speciesdelimitation" : "",
                            (sd_on && str_on) ? " or " : "",
                            str_on ? "speciestree" : ""),
-                 xasprintf("Use 0 (uniform labeled histories) or 1 (uniform rooted trees, recommended default)."),
-                 NULL, 0);
+                 NULL, NULL, 0);
             (*errors)++;
             FLAG_MISSING("speciesmodelprior");
         }
@@ -492,9 +505,8 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
         /* MSC-I introgression: any Newick node has '&phi=' annotation. */
         if (file_contains(f, "&phi=") && !is_effectively_set(f, "phiprior")) {
             emit(out, SEV_ERROR, 0, 0, "BPP101",
-                 xasprintf("'phiprior' is required when 'species&tree' contains MSC-I introgression (a Newick node has '&phi=' annotation)"),
-                 xasprintf("Beta(a,b) prior on the introgression probability phi, e.g. 'phiprior = 1 1'."),
-                 NULL, 0);
+                 xasprintf("'phiprior' is required (species&tree has MSC-I '&phi=' node)"),
+                 NULL, NULL, 0);
             (*errors)++;
             FLAG_MISSING("phiprior");
         }
@@ -503,9 +515,8 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
         const bpp_line_t *mig = find_set_line(f, "migration");
         if (mig && first_int(mig->value) > 0 && !is_effectively_set(f, "wprior")) {
             emit(out, SEV_ERROR, 0, 0, "BPP101",
-                 xasprintf("'wprior' is required when 'migration' specifies one or more connections"),
-                 xasprintf("Provide a Gamma(a,b) prior on w (= 4M/theta), e.g. 'wprior = 2 200'."),
-                 NULL, 0);
+                 xasprintf("'wprior' is required when 'migration' is set"),
+                 NULL, NULL, 0);
             (*errors)++;
             FLAG_MISSING("wprior");
         }
@@ -514,7 +525,7 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
         const bpp_line_t *ph = find_set_line(f, "phase");
         if (species_count == 1 && ph) {
             emit(out, SEV_WARNING, ph->lineno, ph->key_col, "BPP102",
-                 xasprintf("'phase' is meaningful only when species count > 1; this file has 1 species"),
+                 xasprintf("'phase' has no effect with 1 species"),
                  NULL, NULL, 0);
         }
 
@@ -526,18 +537,17 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
             if (bpp_strieq(mtok, "gtr") || strcmp(mtok, "7") == 0) is_gtr = 1;
         }
         if (!is_gtr) {
+            const char *cur = (mdl && mdl->value) ? mdl->value : "(unset; default JC69)";
             const bpp_line_t *qr = find_set_line(f, "qrates");
             if (qr) {
                 emit(out, SEV_WARNING, qr->lineno, qr->key_col, "BPP102",
-                     xasprintf("'qrates' is only used with model = GTR; the current model is '%s'",
-                               mdl && mdl->value ? mdl->value : "(unset)"),
+                     xasprintf("'qrates' needs model = GTR; current model is %s", cur),
                      NULL, NULL, 0);
             }
             const bpp_line_t *bf = find_set_line(f, "basefreqs");
             if (bf) {
                 emit(out, SEV_WARNING, bf->lineno, bf->key_col, "BPP102",
-                     xasprintf("'basefreqs' is only used with model = GTR; the current model is '%s'",
-                               mdl && mdl->value ? mdl->value : "(unset)"),
+                     xasprintf("'basefreqs' needs model = GTR; current model is %s", cur),
                      NULL, NULL, 0);
             }
         }
@@ -624,7 +634,7 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
                 while (*p && isspace((unsigned char) *p)) p++;
                 if (*p && *p != '*' && *p != '#') {
                     emit(out, SEV_WARNING, L->lineno, (int)(p - L->raw) + 1, "BPP002",
-                         xasprintf("line has no '=' assignment and is not a comment or recognised continuation"),
+                         xasprintf("no '=' assignment, comment, or known continuation"),
                          NULL, NULL, 0);
                 }
             }
@@ -651,12 +661,11 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
 
         /* Mode mismatch: a sim-only keyword in inference mode, or vice versa. */
         if ((k->mode & mode) == 0) {
-            const char *want = (mode == MODE_SIM) ? "--simulate" : "inference";
             emit(out, SEV_WARNING, L->lineno, L->key_col, "BPP003",
-                 xasprintf("'%s' is recognised by BPP but only in %s mode; this file is being linted as %s",
+                 xasprintf("'%s' belongs to %s mode, not %s",
                            k->name,
                            (mode == MODE_SIM) ? "inference" : "--simulate",
-                           want),
+                           (mode == MODE_SIM) ? "--simulate" : "inference"),
                  NULL, NULL, 0);
         }
 
@@ -674,9 +683,7 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
             }
             char *fix = build_renamed_line(L, k->replacement, new_value);
             free(new_value);
-            char *msg = xasprintf("legacy keyword '%s' was renamed to '%s'%s",
-                                  L->key_orig, k->replacement,
-                                  k->note ? "" : "");
+            char *msg = xasprintf("'%s' is now '%s'", L->key_orig, k->replacement);
             char *sugg = k->note ? bpp_strdup(k->note) : NULL;
             emit(out, SEV_ERROR, L->lineno, L->key_col, "BPP020",
                  msg, sugg, fix, L->lineno);
@@ -686,7 +693,7 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
 
         case KW_REPARAMETERISED: {
             /* Don't auto-rewrite — the user must review parameter values. */
-            char *msg = xasprintf("legacy keyword '%s' became '%s' with a changed parameterisation",
+            char *msg = xasprintf("'%s' is now '%s' (reparameterised)",
                                   L->key_orig, k->replacement);
             char *sugg = k->note ? bpp_strdup(k->note) : NULL;
             emit(out, SEV_ERROR, L->lineno, L->key_col, "BPP021",
@@ -696,7 +703,7 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
         }
 
         case KW_REMOVED: {
-            char *msg = xasprintf("keyword '%s' is no longer supported", L->key_orig);
+            char *msg = xasprintf("'%s' is no longer supported", L->key_orig);
             char *sugg = k->note ? bpp_strdup(k->note) : NULL;
             emit(out, SEV_ERROR, L->lineno, L->key_col, "BPP022", msg, sugg, NULL, 0);
             errors++;
@@ -704,7 +711,7 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
         }
 
         case KW_UNIMPLEMENTED: {
-            char *msg = xasprintf("keyword '%s' is recognised by BPP 4.x but unimplemented (the parser aborts)", L->key_orig);
+            char *msg = xasprintf("'%s' is recognised but unimplemented; BPP aborts on it", L->key_orig);
             char *sugg = k->note ? bpp_strdup(k->note) : NULL;
             emit(out, SEV_ERROR, L->lineno, L->key_col, "BPP023", msg, sugg, NULL, 0);
             errors++;
@@ -728,7 +735,7 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
             if (L->value && bpp_is_blank(L->value)
                 && !bpp_strieq(L->key, "species&tree")) {
                 emit(out, SEV_WARNING, L->lineno, L->eq_col, "BPP004",
-                     xasprintf("keyword '%s' has an empty value", L->key_orig),
+                     xasprintf("'%s' has no value", L->key_orig),
                      NULL, NULL, 0);
             }
         }
@@ -769,24 +776,30 @@ void bpp_diag_print(const bpp_diag_list_t *diags, const char *path) {
     for (size_t i = 0; i < diags->n; i++) {
         const bpp_diagnostic_t *d = &diags->items[i];
 
+        /* Optional " [CODE]" segment, omitted unless --codes. */
+        char code_buf[32] = {0};
+        if (codes_on && d->code) {
+            snprintf(code_buf, sizeof(code_buf), " [%s%s%s]",
+                     c(ANSI_CYAN), short_code(d->code), c(ANSI_RESET));
+        }
+
         if (d->lineno > 0) {
-            /* path:line:col: severity [CODE]: message */
+            /* path:line:col: severity[ [CODE]]: message */
             fprintf(stderr,
-                    "%s%s%s:%s%d%s:%s%d%s: %s%s%s [%s%s%s]: %s\n",
+                    "%s%s%s:%s%d%s:%s%d%s: %s%s%s%s: %s\n",
                     c(ANSI_BOLD), path,           c(ANSI_RESET),
                     c(ANSI_BOLD), d->lineno,      c(ANSI_RESET),
                     c(ANSI_BOLD), d->column,      c(ANSI_RESET),
                     c(sev_color(d->severity)), sev_label(d->severity), c(ANSI_RESET),
-                    c(ANSI_CYAN), d->code ? d->code : "", c(ANSI_RESET),
+                    code_buf,
                     d->message ? d->message : "");
         } else {
-            /* File-level diagnostic (missing required, missing default).
-             * Omit the :line:col: that wouldn't refer to anything. */
+            /* File-level diagnostic; no line:col. */
             fprintf(stderr,
-                    "%s%s%s: %s%s%s [%s%s%s]: %s\n",
+                    "%s%s%s: %s%s%s%s: %s\n",
                     c(ANSI_BOLD), path, c(ANSI_RESET),
                     c(sev_color(d->severity)), sev_label(d->severity), c(ANSI_RESET),
-                    c(ANSI_CYAN), d->code ? d->code : "", c(ANSI_RESET),
+                    code_buf,
                     d->message ? d->message : "");
         }
         if (d->suggestion) {

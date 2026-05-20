@@ -61,6 +61,10 @@ typedef enum {
 /* Set the color mode for subsequent calls to bpp_diag_print. */
 void bpp_color_set(bpp_color_mode_t mode);
 
+/* Toggle display of the [CODE] tag in printed diagnostics. Off by default
+ * for terser output; --codes turns it on. */
+void bpp_codes_set(int show);
+
 /* Print a diagnostic list to stderr in compiler-style format. */
 void bpp_diag_print(const bpp_diag_list_t *diags, const char *path);
 

@@ -1,0 +1,1 @@
+Write a command line program in C that take a bpp control file as input and does syntax checking to identify errors and potentially make corrections. The program should understand syntax of previous versions of bpp and be able to propose fixes to syntax problems due to out-of-date control files written for earlier bpp versions. Make sense?

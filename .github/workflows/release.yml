@@ -26,18 +26,22 @@ jobs:
             os: ubuntu-latest
             archive_ext: tar.gz
             bin: bpp-lint
-          - target: macos-x86_64
-            os: macos-13
-            archive_ext: tar.gz
-            bin: bpp-lint
+            cross_arch: ''
           - target: macos-arm64
             os: macos-14
             archive_ext: tar.gz
             bin: bpp-lint
+            cross_arch: ''
+          - target: macos-x86_64
+            os: macos-14           # cross-compile on Apple Silicon
+            archive_ext: tar.gz
+            bin: bpp-lint
+            cross_arch: x86_64     # see EXTRA_CFLAGS in Makefile
           - target: windows-x86_64
             os: windows-latest
             archive_ext: zip
             bin: bpp-lint.exe
+            cross_arch: ''
 
     steps:
       - uses: actions/checkout@v4
@@ -52,14 +56,24 @@ jobs:
             make
             mingw-w64-x86_64-gcc
 
-      - name: Build (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Build (Unix, native)
+        if: matrix.os != 'windows-latest' && matrix.cross_arch == ''
         run: make
+
+      - name: Build (macOS cross-compile to ${{ matrix.cross_arch }})
+        if: matrix.cross_arch != '' && matrix.os == 'macos-14'
+        run: make EXTRA_CFLAGS="-arch ${{ matrix.cross_arch }}" EXTRA_LDFLAGS="-arch ${{ matrix.cross_arch }}"
 
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
         shell: msys2 {0}
         run: make BIN=bpp-lint.exe
+
+      - name: Verify binary arch (macOS cross-build)
+        if: matrix.cross_arch != '' && matrix.os == 'macos-14'
+        run: |
+          file bpp-lint
+          file bpp-lint | grep -q "${{ matrix.cross_arch }}"
 
       - name: Stage artifact
         shell: bash

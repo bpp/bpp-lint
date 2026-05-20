@@ -561,7 +561,7 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
             }
             if (suppress) continue;
             emit(out, SEV_WARNING, 0, 0, "BPP103",
-                 xasprintf("'%s' not set; BPP will use default '%s'", k->name, k->default_value),
+                 xasprintf("'%s' not set; using default '%s'", k->name, k->default_value),
                  NULL, NULL, 0);
         }
     }

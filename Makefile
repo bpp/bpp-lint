@@ -1,6 +1,9 @@
 CC      ?= cc
 CFLAGS  ?= -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -O2
 LDFLAGS ?=
+# libm is bundled with libc on macOS, but glibc requires an explicit -lm
+# for sqrt / log etc. used in priors.c.
+LDLIBS  ?= -lm
 
 # EXTRA_CFLAGS / EXTRA_LDFLAGS are appended after the defaults. Use these
 # for additive flags (e.g. `-arch x86_64` to cross-compile macOS Intel on
@@ -20,7 +23,7 @@ OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRCS))
 all: $(BIN)
 
 $(BIN): $(OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<

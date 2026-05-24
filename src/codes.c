@@ -74,6 +74,16 @@ static const bpp_code_doc_t codes[] = {
       "[DIR|IID]'. The new parameters cannot be derived mechanically from the\n"
       "old alpha; supply them explicitly." },
 
+    { "015",
+      "'phiprior' is not two positive numbers.",
+      "phiprior is the Beta(a, b) prior on introgression proportions in MSC-I\n"
+      "models. BPP expects exactly two positive doubles on the right-hand side\n"
+      "(e.g. 'phiprior = 1 1' for a uniform Beta(1, 1)). Variants like\n"
+      "'phiprior = beta 1 1' look natural by analogy with thetaprior/tauprior\n"
+      "but BPP rejects them at parse time with 'Option phiprior expects two\n"
+      "doubles'. The linter catches the bare-token, wrong-count, and\n"
+      "non-positive-number cases up front." },
+
     /* 02x: legacy / removed / unimplemented keywords */
     { "020",
       "Legacy keyword renamed in a modern BPP release.",

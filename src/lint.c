@@ -312,6 +312,36 @@ static void check_tauprior(bpp_diag_list_t *out, const bpp_line_t *line) {
     }
 }
 
+static void check_phiprior(bpp_diag_list_t *out, const bpp_line_t *line) {
+    if (!line->value) return;
+    /* BPP grammar: phiprior = a b  (two positive doubles, Beta(a, b)).
+     * No distribution-word prefix is accepted; tauprior/thetaprior allow
+     * "invgamma|gamma" but phiprior does not. */
+    int nt = count_tokens(line->value);
+    if (nt != 2) {
+        emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP015",
+             xasprintf("'phiprior' expects 2 tokens (Beta a b), got %d", nt),
+             xasprintf("write 'phiprior = a b' with a, b > 0"),
+             NULL, 0);
+        return;
+    }
+    char ta[64] = {0}, tb[64] = {0};
+    sscanf(line->value, "%63s %63s", ta, tb);
+    double a, b;
+    if (!parse_double(ta, &a) || !parse_double(tb, &b)) {
+        emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP015",
+             xasprintf("'phiprior' value '%s %s' is not two numbers", ta, tb),
+             xasprintf("write 'phiprior = a b' with a, b > 0"),
+             NULL, 0);
+        return;
+    }
+    if (a <= 0 || b <= 0) {
+        emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP015",
+             xasprintf("'phiprior' a=%g b=%g; Beta requires both > 0", a, b),
+             NULL, NULL, 0);
+    }
+}
+
 static void check_finetune_positional(bpp_diag_list_t *out, const bpp_line_t *line) {
     if (!line->value) return;
     /* New (>=v4.8.1) syntax has the colon embedded inside subsequent tokens
@@ -909,6 +939,7 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
             if (bpp_strieq(L->key, "print"))         check_print(out, L);
             else if (bpp_strieq(L->key, "thetaprior")) check_thetaprior(out, L);
             else if (bpp_strieq(L->key, "tauprior"))   check_tauprior(out, L);
+            else if (bpp_strieq(L->key, "phiprior"))   check_phiprior(out, L);
             else if (bpp_strieq(L->key, "finetune"))   check_finetune_positional(out, L);
             else if (bpp_strieq(L->key, "locusrate") && mode == MODE_INFER) check_locusrate_legacy(out, L);
 

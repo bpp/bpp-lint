@@ -13,6 +13,9 @@ struct CtlEditor: NSViewRepresentable {
         guard let tv = scroll.documentView as? NSTextView else { return scroll }
         tv.delegate = context.coordinator
         tv.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        tv.isEditable = true
+        tv.isSelectable = true
+        tv.isFieldEditor = false
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
@@ -23,18 +26,32 @@ struct CtlEditor: NSViewRepresentable {
         tv.usesFindBar = true
         tv.textContainerInset = NSSize(width: 8, height: 8)
         tv.string = text
+        tv.textColor = NSColor.textColor
+        tv.typingAttributes = [
+            .font: tv.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .foregroundColor: NSColor.textColor,
+        ]
         if let storage = tv.textStorage {
             BppCtlHighlighter.apply(to: storage, baseFont: tv.font)
+        }
+        // Focus the text view so keystrokes land in it on launch.
+        DispatchQueue.main.async {
+            tv.window?.makeFirstResponder(tv)
         }
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
+        // Refresh the coordinator's reference so its Binding writes go to
+        // the current source-of-truth State setter (not a stale one).
+        context.coordinator.parent = self
+
         guard let tv = scroll.documentView as? NSTextView,
               let storage = tv.textStorage else { return }
 
         if tv.string != text {
-            // Preserve selection across an external text update.
+            // External text update (e.g. file open). Replace contents and
+            // preserve selection where possible.
             let sel = tv.selectedRange()
             tv.string = text
             BppCtlHighlighter.apply(to: storage, baseFont: tv.font)
@@ -56,10 +73,21 @@ struct CtlEditor: NSViewRepresentable {
         func textDidChange(_ note: Notification) {
             guard let tv = note.object as? NSTextView,
                   let storage = tv.textStorage else { return }
-            // Update binding. updateNSView's `tv.string != text` guard
-            // prevents an echo update from clobbering the cursor.
-            parent.text = tv.string
+            // Re-style the (now-mutated) text immediately so colors track
+            // the keystroke. Attribute-only changes do NOT retrigger
+            // textDidChange, so this is safe.
             BppCtlHighlighter.apply(to: storage, baseFont: tv.font)
+
+            // Defer the SwiftUI state write to the next runloop tick.
+            // Writing into a @State binding synchronously from inside an
+            // AppKit text-edit notification can be swallowed (or cause a
+            // re-entrant updateNSView that clobbers the keystroke); the
+            // DispatchQueue.main.async hop lets AppKit finish the event
+            // before SwiftUI re-renders.
+            let newText = tv.string
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.text = newText
+            }
         }
     }
 

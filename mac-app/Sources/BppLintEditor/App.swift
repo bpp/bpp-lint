@@ -1,12 +1,39 @@
 import SwiftUI
 import AppKit
 
+extension Notification.Name {
+    static let ctlEditorOpenFile = Notification.Name("BppLintEditor.OpenFile")
+    static let ctlEditorSaveFile = Notification.Name("BppLintEditor.SaveFile")
+    static let ctlEditorRelint   = Notification.Name("BppLintEditor.Relint")
+}
+
 @main
 struct BppLintEditorApp: App {
     var body: some Scene {
         WindowGroup("BPP Lint Editor") {
             ContentView()
                 .frame(minWidth: 900, minHeight: 600)
+        }
+        .commands {
+            // File menu: replace the default "New" group with our Open/Save.
+            CommandGroup(replacing: .newItem) {
+                Button("Open…") {
+                    NotificationCenter.default.post(name: .ctlEditorOpenFile, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: .command)
+
+                Button("Save…") {
+                    NotificationCenter.default.post(name: .ctlEditorSaveFile, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: .command)
+            }
+            // Custom Lint menu.
+            CommandMenu("Lint") {
+                Button("Re-run Linter") {
+                    NotificationCenter.default.post(name: .ctlEditorRelint, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: .command)
+            }
         }
     }
 }
@@ -36,6 +63,17 @@ struct ContentView: View {
             relint(newValue)
         }
         .onAppear {
+            relint(text)
+        }
+        // Menu-bar commands route through NotificationCenter so the
+        // top-level Scene can reach this view's state.
+        .onReceive(NotificationCenter.default.publisher(for: .ctlEditorOpenFile)) { _ in
+            openFile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ctlEditorSaveFile)) { _ in
+            saveFile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ctlEditorRelint)) { _ in
             relint(text)
         }
     }

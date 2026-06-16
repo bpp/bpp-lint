@@ -64,3 +64,6 @@ dkms.conf
 Package.resolved
 *.xcodeproj/
 DerivedData/
+
+# Emacs byte-compiled artifacts (emacs/)
+*.elc

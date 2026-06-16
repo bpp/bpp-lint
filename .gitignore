@@ -57,3 +57,10 @@ dkms.conf
 # build artifacts
 /build/
 /bpp-lint
+
+# Swift package artifacts (mac-app/)
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/
+DerivedData/

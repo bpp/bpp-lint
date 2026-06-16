@@ -7,8 +7,25 @@ extension Notification.Name {
     static let ctlEditorRelint   = Notification.Name("BppLintEditor.Relint")
 }
 
+// SwiftUI apps launched via `swift run` (no Info.plist, no .app bundle)
+// default to .accessory activation - no Dock icon, no menu bar, no key
+// focus on windows. Force regular activation so the editor behaves as a
+// normal foreground macOS app.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+
 @main
 struct BppLintEditorApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup("BPP Lint Editor") {
             ContentView()

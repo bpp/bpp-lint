@@ -789,6 +789,362 @@ static void check_cross_keyword(const bpp_file_t *f, const bpp_lint_opts_t *opts
     }
 }
 
+/* ---------- species&tree block validator ----------
+ *
+ * Validates the species&tree multi-line block:
+ *
+ *   species&tree = N name1 name2 ... nameN
+ *                    count1 count2 ... countN
+ *                  (newick tree);
+ *
+ * Plain Newick only. Extended Newick (MSC-I with '&phi=' annotations and
+ * '#H' hybrid-node markers) is detected and emits BPP136 instead of being
+ * validated -- bpp's Newick line containing '#' would be truncated by the
+ * control-file tokenizer's comment handling, so we cannot reliably parse
+ * it the same way.
+ *
+ * Diagnostic codes (see codes.c):
+ *   BPP130 - header N != name token count
+ *   BPP131 - counts line missing, or has wrong number of tokens
+ *   BPP132 - counts line has a non-integer or negative value
+ *   BPP133 - Newick line missing
+ *   BPP134 - Newick syntax problem (unbalanced parens or missing ';')
+ *   BPP135 - Newick leaves don't match the header name list
+ *   BPP136 - extended-Newick markers present; detailed checks skipped
+ */
+
+typedef struct {
+    char **items;
+    int    n;
+    int    cap;
+} bpp_strlist_t;
+
+static int strlist_push(bpp_strlist_t *l, const char *s, int len) {
+    if (l->n >= l->cap) {
+        int nc = l->cap ? l->cap * 2 : 8;
+        char **nl = realloc(l->items, (size_t) nc * sizeof(char *));
+        if (!nl) return -1;
+        l->items = nl;
+        l->cap = nc;
+    }
+    char *p = malloc((size_t) len + 1);
+    if (!p) return -1;
+    memcpy(p, s, (size_t) len);
+    p[len] = '\0';
+    l->items[l->n++] = p;
+    return 0;
+}
+
+static void strlist_free(bpp_strlist_t *l) {
+    for (int i = 0; i < l->n; i++) free(l->items[i]);
+    free(l->items);
+    l->items = NULL;
+    l->n = l->cap = 0;
+}
+
+static int strlist_contains(const bpp_strlist_t *l, const char *s) {
+    for (int i = 0; i < l->n; i++) {
+        if (strcmp(l->items[i], s) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Index of the next species&tree continuation line at or after `start`:
+ * non-blank, non-comment-only, and either has no parsed keyword assignment
+ * or visibly starts with '(' (i.e. a Newick line whose content contains
+ * '=' inside an extended-Newick annotation like '[&phi=0.3]' has been
+ * misparsed as a keyword assignment by the line lexer; accept it). */
+static int next_content_line(const bpp_file_t *f, size_t start) {
+    for (size_t i = start; i < f->n; i++) {
+        if (bpp_is_blank(f->lines[i].raw)) continue;
+        const char *p = f->lines[i].raw;
+        while (*p && isspace((unsigned char) *p)) p++;
+        if (*p == '*' || *p == '#') continue;
+        if (*p == '(') return (int) i;
+        if (f->lines[i].key != NULL) return -1;
+        return (int) i;
+    }
+    return -1;
+}
+
+/* Walk a Newick string. Collects leaf names into `leaves`, reports final
+ * paren depth, and notes whether extended-Newick markers ('&' or '#') or
+ * a trailing ';' were seen. Returns 0 on success or -1 if a ')' was
+ * encountered with depth 0 (which terminates the scan early). */
+static int walk_newick(const char *s,
+                       bpp_strlist_t *leaves,
+                       int *paren_balance,
+                       int *has_extended,
+                       int *has_semicolon)
+{
+    int depth = 0;
+    int ext = 0;
+    int semi = 0;
+    int rc = 0;
+    enum { CTX_LEAF, CTX_INTERNAL } ctx = CTX_LEAF;
+
+    while (*s) {
+        unsigned char c = (unsigned char) *s;
+        if (isspace(c)) { s++; continue; }
+
+        if (c == '(') {
+            depth++;
+            ctx = CTX_LEAF;
+            s++; continue;
+        }
+        if (c == ')') {
+            depth--;
+            if (depth < 0) { rc = -1; break; }
+            ctx = CTX_INTERNAL;
+            s++; continue;
+        }
+        if (c == ',') {
+            ctx = CTX_LEAF;
+            s++; continue;
+        }
+        if (c == ';') {
+            semi = 1;
+            s++;
+            break;
+        }
+        if (c == ':') {
+            /* branch length -- skip to next structural char */
+            s++;
+            while (*s && *s != ',' && *s != ')' && *s != ';') s++;
+            continue;
+        }
+        if (c == '&' || c == '#') {
+            ext = 1;
+            s++;
+            while (*s && *s != ',' && *s != ')' && *s != ';' && *s != ':') s++;
+            continue;
+        }
+        if (isalnum(c) || c == '_' || c == '-' || c == '.') {
+            const char *start = s;
+            while (*s && (isalnum((unsigned char) *s) || *s == '_' ||
+                          *s == '-' || *s == '.')) s++;
+            int len = (int)(s - start);
+            if (ctx == CTX_LEAF) {
+                (void) strlist_push(leaves, start, len);
+            }
+            continue;   /* internal labels (ctx == CTX_INTERNAL) are ignored */
+        }
+        /* unknown character: skip */
+        s++;
+    }
+
+    *paren_balance = depth;
+    *has_extended  = ext;
+    *has_semicolon = semi;
+    return rc;
+}
+
+/* Compare two name sets and produce a human-readable diff fragment of
+ * the form "missing: A,B; extra: C,D" (caller frees). NULL on no-diff. */
+static char *strlist_diff(const bpp_strlist_t *expected,
+                          const bpp_strlist_t *actual)
+{
+    bpp_strlist_t missing = {0}, extra = {0};
+    for (int i = 0; i < expected->n; i++) {
+        if (!strlist_contains(actual, expected->items[i])) {
+            (void) strlist_push(&missing, expected->items[i],
+                                (int) strlen(expected->items[i]));
+        }
+    }
+    for (int i = 0; i < actual->n; i++) {
+        if (!strlist_contains(expected, actual->items[i])) {
+            (void) strlist_push(&extra, actual->items[i],
+                                (int) strlen(actual->items[i]));
+        }
+    }
+    if (missing.n == 0 && extra.n == 0) {
+        strlist_free(&missing); strlist_free(&extra);
+        return NULL;
+    }
+    /* Concatenate. */
+    size_t cap = 64;
+    for (int i = 0; i < missing.n; i++) cap += strlen(missing.items[i]) + 2;
+    for (int i = 0; i < extra.n;   i++) cap += strlen(extra.items[i])   + 2;
+    char *buf = malloc(cap);
+    if (!buf) { strlist_free(&missing); strlist_free(&extra); return NULL; }
+    size_t w = 0;
+    if (missing.n > 0) {
+        w += (size_t) snprintf(buf + w, cap - w, "missing in Newick: ");
+        for (int i = 0; i < missing.n; i++) {
+            w += (size_t) snprintf(buf + w, cap - w, "%s%s",
+                                   i ? "," : "", missing.items[i]);
+        }
+    }
+    if (extra.n > 0) {
+        w += (size_t) snprintf(buf + w, cap - w, "%sextra in Newick: ",
+                               missing.n > 0 ? "; " : "");
+        for (int i = 0; i < extra.n; i++) {
+            w += (size_t) snprintf(buf + w, cap - w, "%s%s",
+                                   i ? "," : "", extra.items[i]);
+        }
+    }
+    strlist_free(&missing); strlist_free(&extra);
+    return buf;
+}
+
+static void check_species_tree_block(const bpp_file_t *f,
+                                     bpp_diag_list_t *out, int *errors)
+{
+    const bpp_line_t *header = find_set_line(f, "species&tree");
+    if (!header || !header->value) return;
+
+    /* Tokenise header value: first = N, remainder = species names. */
+    char *tokens[256];
+    int nt = bpp_tokenise_value(header->value, tokens, 256);
+    if (nt < 1) return;     /* empty value; completeness will catch it */
+
+    int N = atoi(tokens[0]);
+    int name_count = nt - 1;
+
+    bpp_strlist_t header_names = {0};
+    for (int i = 1; i < nt; i++) {
+        (void) strlist_push(&header_names, tokens[i], (int) strlen(tokens[i]));
+    }
+
+    /* BPP130: header N vs name token count. */
+    if (N != name_count) {
+        emit(out, SEV_ERROR, header->lineno, header->val_col, "BPP130",
+             xasprintf("'species&tree' header says N=%d but found %d name token(s)",
+                       N, name_count),
+             xasprintf("the first token is the species count; the next N tokens are species names"),
+             NULL, 0);
+        (*errors)++;
+    }
+    bpp_tokens_free(tokens, nt);
+
+    /* For a single-species run the counts and Newick lines are omitted;
+     * nothing further to validate. */
+    int effective_N = (name_count > 0 && (N == name_count || N <= 0))
+                        ? name_count : N;
+    if (effective_N <= 1) {
+        strlist_free(&header_names);
+        return;
+    }
+
+    /* Walk forward through the file from the header line to find the
+     * counts line and then the Newick line (next two non-blank,
+     * non-comment lines). */
+    size_t header_idx = (size_t)(header - f->lines);
+    int counts_idx = next_content_line(f, header_idx + 1);
+
+    if (counts_idx < 0) {
+        emit(out, SEV_ERROR, header->lineno, header->key_col, "BPP131",
+             xasprintf("'species&tree' missing counts line (expected %d integers)",
+                       effective_N),
+             NULL, NULL, 0);
+        (*errors)++;
+        strlist_free(&header_names);
+        return;
+    }
+
+    /* Parse counts line tokens. */
+    const bpp_line_t *counts_line = &f->lines[counts_idx];
+    char *ctoks[256];
+    int nc = bpp_tokenise_value(counts_line->raw, ctoks, 256);
+    if (nc != effective_N) {
+        emit(out, SEV_ERROR, counts_line->lineno, 1, "BPP131",
+             xasprintf("'species&tree' counts line has %d token(s); expected %d",
+                       nc, effective_N),
+             NULL, NULL, 0);
+        (*errors)++;
+    }
+    for (int i = 0; i < nc; i++) {
+        char *endp = NULL;
+        long v = strtol(ctoks[i], &endp, 10);
+        if (!endp || endp == ctoks[i] || *endp != '\0' || v < 0) {
+            emit(out, SEV_ERROR, counts_line->lineno, 1, "BPP132",
+                 xasprintf("'species&tree' counts: '%s' is not a non-negative integer",
+                           ctoks[i]),
+                 NULL, NULL, 0);
+            (*errors)++;
+        }
+    }
+    bpp_tokens_free(ctoks, nc);
+
+    /* Locate the Newick line (next content line after counts). */
+    int newick_idx = next_content_line(f, (size_t) counts_idx + 1);
+    if (newick_idx < 0) {
+        emit(out, SEV_ERROR, header->lineno, header->key_col, "BPP133",
+             xasprintf("'species&tree' missing Newick line after counts"),
+             NULL, NULL, 0);
+        (*errors)++;
+        strlist_free(&header_names);
+        return;
+    }
+
+    const bpp_line_t *newick_line = &f->lines[newick_idx];
+
+    /* Strip a trailing '*' comment from the newick raw content. '#' is a
+     * comment marker in BPP control files generally, but inside Newick it
+     * marks extended Newick (#H1 etc); we don't strip it here -- the
+     * walker detects '#' separately and emits BPP136. */
+    char *newick = bpp_strdup(newick_line->raw);
+    if (newick) {
+        for (char *p = newick; *p; p++) {
+            if (*p == '*') { *p = '\0'; break; }
+        }
+    }
+
+    bpp_strlist_t leaves = {0};
+    int paren_balance = 0, has_ext = 0, has_semi = 0;
+    walk_newick(newick ? newick : "", &leaves,
+                &paren_balance, &has_ext, &has_semi);
+    free(newick);
+
+    if (has_ext) {
+        emit(out, SEV_INFO, newick_line->lineno, 1, "BPP136",
+             xasprintf("'species&tree' Newick contains extended-Newick markers; detailed validation skipped"),
+             xasprintf("MSC-I introgression trees ('&phi=' / '#H') are not yet validated by bpp-lint"),
+             NULL, 0);
+        strlist_free(&leaves);
+        strlist_free(&header_names);
+        return;
+    }
+
+    if (paren_balance != 0) {
+        emit(out, SEV_ERROR, newick_line->lineno, 1, "BPP134",
+             xasprintf("'species&tree' Newick has unbalanced parentheses (depth=%d at end)",
+                       paren_balance),
+             NULL, NULL, 0);
+        (*errors)++;
+    }
+    if (!has_semi) {
+        emit(out, SEV_ERROR, newick_line->lineno, 1, "BPP134",
+             xasprintf("'species&tree' Newick is missing the terminating ';'"),
+             NULL, NULL, 0);
+        (*errors)++;
+    }
+
+    if (paren_balance == 0) {
+        char *diff = strlist_diff(&header_names, &leaves);
+        if (diff || leaves.n != effective_N) {
+            const char *msg_prefix = (leaves.n != effective_N)
+                ? "'species&tree' Newick leaf count mismatch"
+                : "'species&tree' Newick leaves don't match header names";
+            char *msg;
+            if (diff) {
+                msg = xasprintf("%s (header N=%d, Newick leaves=%d; %s)",
+                                msg_prefix, effective_N, leaves.n, diff);
+            } else {
+                msg = xasprintf("%s (header N=%d, Newick leaves=%d)",
+                                msg_prefix, effective_N, leaves.n);
+            }
+            emit(out, SEV_ERROR, newick_line->lineno, 1, "BPP135",
+                 msg, NULL, NULL, 0);
+            (*errors)++;
+            free(diff);
+        }
+    }
+
+    strlist_free(&leaves);
+    strlist_free(&header_names);
+}
+
 /* ---------- main lint pass ---------- */
 
 int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
@@ -962,6 +1318,13 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
     /* Cross-keyword consistency: incompatible value combinations between
      * keywords that BPP's parser rejects via check_validity() at run time. */
     check_cross_keyword(f, opts, out, &errors);
+
+    /* species&tree block: header N vs name list, counts shape, plain
+     * Newick parse + leaf consistency. Skipped in --simulate mode (a
+     * --simulate file uses a separate treefile path). */
+    if (!opts->simulate) {
+        check_species_tree_block(f, out, &errors);
+    }
 
     return errors;
 }

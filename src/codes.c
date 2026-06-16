@@ -216,6 +216,49 @@ static const bpp_code_doc_t codes[] = {
       "BPP 4.x. If you need migration, fix the species tree (speciestree = 0).\n"
       "Source: bpp-4.8.7 cfile.c:2884-2887." },
 
+    /* 13x: species&tree block validation (plain Newick only). */
+    { "130",
+      "species&tree header N does not match the number of name tokens.",
+      "The 'species&tree' header is 'N name1 name2 ... nameN'. The integer N\n"
+      "must equal the number of names that follow it on the same line." },
+
+    { "131",
+      "species&tree counts line is missing or has the wrong number of tokens.",
+      "After the header line, the next non-blank, non-comment line must list\n"
+      "exactly N non-negative integers, one per species, giving the number of\n"
+      "sequences sampled from each species (matching the Imap file)." },
+
+    { "132",
+      "species&tree counts line contains a non-integer or negative value.",
+      "Each token on the counts line must parse as a non-negative integer.\n"
+      "BPP's parser rejects floats, signs, or stray characters." },
+
+    { "133",
+      "species&tree Newick line is missing.",
+      "For N >= 2 the block must conclude with a Newick tree on the next\n"
+      "non-blank, non-comment line after the counts. For N == 1 the Newick\n"
+      "and counts lines are optional and not validated." },
+
+    { "134",
+      "species&tree Newick has unbalanced parentheses or a missing ';'.",
+      "Each '(' must be matched by a ')'; the tree must end with a ';'.\n"
+      "Branch lengths (':<num>') are allowed and ignored. Whitespace is\n"
+      "free between tokens." },
+
+    { "135",
+      "species&tree Newick leaves don't match the header name list.",
+      "Every species named in the header must appear as a leaf in the Newick\n"
+      "tree, and no extra leaves are allowed. The diagnostic message lists\n"
+      "the names missing from the Newick and the unexpected ones present.\n"
+      "Comparison is case-sensitive (BPP itself is case-sensitive on species\n"
+      "names)." },
+
+    { "136",
+      "species&tree Newick uses extended-Newick markers; detailed checks skipped.",
+      "Extended Newick (MSC-I introgression: '&phi=' annotations and '#H'\n"
+      "hybrid-node markers) is not yet validated by bpp-lint. The block is\n"
+      "left to BPP's parser. Header/counts checks still run." },
+
     { "111",
       "tauprior is far too diffuse vs the data upper bound (--check-priors).",
       "Triggered when --check-priors is passed and the existing tauprior's\n"

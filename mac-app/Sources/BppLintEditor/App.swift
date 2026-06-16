@@ -67,7 +67,9 @@ struct ContentView: View {
             toolbar
             Divider()
             HSplitView {
-                CtlEditor(text: $text, highlightedLine: highlightedLine)
+                CtlEditor(text: $text,
+                          highlightedLine: highlightedLine,
+                          diagnostics: diagnostics)
                     .frame(minWidth: 400)
                 DiagnosticsList(
                     diagnostics: diagnostics,

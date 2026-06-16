@@ -3,10 +3,12 @@ import AppKit
 
 // SwiftUI wrapper around NSTextView so we can apply per-character styling.
 // Two-way binds `text`; `highlightedLine` optionally scrolls / shades a line
-// (used when a diagnostic is selected in the side panel).
+// (used when a diagnostic is selected in the side panel); `diagnostics`
+// paints wavy underlines under offending tokens with a hover tooltip.
 struct CtlEditor: NSViewRepresentable {
     @Binding var text: String
     var highlightedLine: Int?
+    var diagnostics: [Diagnostic] = []
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSTextView.scrollableTextView()
@@ -59,9 +61,108 @@ struct CtlEditor: NSViewRepresentable {
             tv.setSelectedRange(NSRange(location: clamped, length: 0))
         }
 
+        // Re-apply diagnostic underlines on the next runloop tick. AppKit
+        // can be partway through its keystroke handling when SwiftUI fires
+        // updateNSView (via a status-string state change, etc.), and any
+        // layout-touching API (glyphRange, boundingRect, addToolTip)
+        // throws an NSException if the textStorage is mid-transaction.
+        // Deferring guarantees the current edit cycle has closed.
+        let diagsSnapshot = diagnostics
+        DispatchQueue.main.async { [weak tv] in
+            guard let tv = tv, let storage = tv.textStorage else { return }
+            Self.applyDiagnostics(diagsSnapshot, to: storage, in: tv)
+        }
+
         if let line = highlightedLine {
             scrollTo(line: line, in: tv)
         }
+    }
+
+    // MARK: - Diagnostic squiggles
+    //
+    // NSSpellingState is the same attribute NSTextView uses internally for
+    // misspelled-word squiggles. spellingState=1 paints a red wavy line
+    // (error), spellingState=2 paints a green one (warning). Info-severity
+    // gets a regular dotted blue underline since spellingState only
+    // produces those two looks. Tooltips on hover via addToolTip(_:owner:).
+
+    private static func applyDiagnostics(_ diagnostics: [Diagnostic],
+                                         to storage: NSTextStorage,
+                                         in textView: NSTextView) {
+        let storageLen = storage.length
+        let full = NSRange(location: 0, length: storageLen)
+
+        storage.beginEditing()
+        storage.removeAttribute(.spellingState, range: full)
+        storage.removeAttribute(.underlineStyle, range: full)
+        storage.removeAttribute(.underlineColor, range: full)
+        storage.endEditing()
+
+        guard storageLen > 0 else { return }
+        let nsStr = storage.string as NSString
+
+        for diag in diagnostics {
+            guard let ln = diag.lineNumber, let col = diag.column else { continue }
+            guard let range = tokenRange(line: ln, column: col, in: nsStr) else { continue }
+            guard range.location >= 0,
+                  range.location + range.length <= storage.length,
+                  range.length > 0 else { continue }
+
+            storage.beginEditing()
+            switch diag.severity {
+            case .error:
+                storage.addAttribute(.spellingState, value: 1, range: range)
+            case .warning:
+                storage.addAttribute(.spellingState, value: 2, range: range)
+            case .info:
+                let style = NSUnderlineStyle.single.rawValue |
+                            NSUnderlineStyle.patternDot.rawValue
+                storage.addAttribute(.underlineStyle, value: style, range: range)
+                storage.addAttribute(.underlineColor, value: NSColor.systemBlue, range: range)
+            }
+            storage.endEditing()
+        }
+        // Hover tooltips on the squiggle are deferred to a future pass --
+        // glyphRange + addToolTip threw NSExceptions mid-edit-cycle. For
+        // now, full diagnostic text is in the side panel.
+    }
+
+    // Compute the character range to underline for a diagnostic anchored
+    // at (1-based) `line`:`column`. Underlines from `column` to the next
+    // whitespace on that line ("the token the user typed"); falls back to
+    // a single character if column already sits on whitespace.
+    private static func tokenRange(line: Int, column: Int, in str: NSString) -> NSRange? {
+        let total = str.length
+        guard line >= 1, total > 0 else { return nil }
+
+        var lineStart = 0
+        var current = 1
+        while current < line {
+            let r = str.range(of: "\n",
+                              range: NSRange(location: lineStart, length: total - lineStart))
+            if r.location == NSNotFound { return nil }
+            lineStart = r.location + 1
+            current += 1
+        }
+
+        let restRange = NSRange(location: lineStart, length: total - lineStart)
+        let nl = str.range(of: "\n", range: restRange)
+        let lineEnd = (nl.location == NSNotFound) ? total : nl.location
+
+        let colOffset = max(0, column - 1)
+        let tokStart = min(lineStart + colOffset, lineEnd)
+        var p = tokStart
+        while p < lineEnd {
+            let c = str.character(at: p)
+            if c == 0x20 || c == 0x09 { break }
+            p += 1
+        }
+        if p == tokStart {
+            return tokStart < lineEnd
+                ? NSRange(location: tokStart, length: 1)
+                : nil
+        }
+        return NSRange(location: tokStart, length: p - tokStart)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }

@@ -867,15 +867,18 @@ static int next_content_line(const bpp_file_t *f, size_t start) {
     return -1;
 }
 
-/* Walk a Newick string. Collects leaf names into `leaves`, reports final
- * paren depth, and notes whether extended-Newick markers ('&' or '#') or
- * a trailing ';' were seen. Returns 0 on success or -1 if a ')' was
- * encountered with depth 0 (which terminates the scan early). */
+/* Walk a Newick string. Collects leaf names into `leaves` and, if
+ * `inner_labels` is non-NULL, explicit internal-node labels (the token after
+ * a ')') into it. Reports final paren depth, and notes whether
+ * extended-Newick markers ('&' or '#') or a trailing ';' were seen. Returns 0
+ * on success or -1 if a ')' was encountered with depth 0 (which terminates the
+ * scan early). */
 static int walk_newick(const char *s,
                        bpp_strlist_t *leaves,
                        int *paren_balance,
                        int *has_extended,
-                       int *has_semicolon)
+                       int *has_semicolon,
+                       bpp_strlist_t *inner_labels)
 {
     int depth = 0;
     int ext = 0;
@@ -926,8 +929,10 @@ static int walk_newick(const char *s,
             int len = (int)(s - start);
             if (ctx == CTX_LEAF) {
                 (void) strlist_push(leaves, start, len);
+            } else if (inner_labels) {
+                (void) strlist_push(inner_labels, start, len);
             }
-            continue;   /* internal labels (ctx == CTX_INTERNAL) are ignored */
+            continue;   /* internal labels captured only when requested */
         }
         /* unknown character: skip */
         s++;
@@ -1093,7 +1098,7 @@ static void check_species_tree_block(const bpp_file_t *f,
     bpp_strlist_t leaves = {0};
     int paren_balance = 0, has_ext = 0, has_semi = 0;
     walk_newick(newick ? newick : "", &leaves,
-                &paren_balance, &has_ext, &has_semi);
+                &paren_balance, &has_ext, &has_semi, NULL);
     free(newick);
 
     if (has_ext) {
@@ -1143,6 +1148,200 @@ static void check_species_tree_block(const bpp_file_t *f,
 
     strlist_free(&leaves);
     strlist_free(&header_names);
+}
+
+/* ---------- migration (MSC-M) block validator ----------
+ *
+ * A `migration = N` line is followed by N rows, each:
+ *
+ *     <source> <target> [p1 [p2 [p3 [p4 [p5]]]]]
+ *
+ * where source/target are population labels and p1..p5 are optional numeric
+ * rate/prior parameters (BPP: cfile.c parse_migration). Valid population
+ * labels are the species-tree tip names plus any *explicitly* labelled
+ * internal node in the Newick -- ancestral nodes involved in migration must
+ * carry a label (BPP manual: "those involved in migration have to be"), since
+ * the auto-generated comma-joined labels are not typeable (',' is a token
+ * delimiter). BPP itself fatals with "Cannot create migration band" for an
+ * unknown name and "migration from one species to itself" for source==target
+ * (method.c:2751-2756).
+ *
+ *   BPP140 - migration declares N bands but fewer rows are present
+ *   BPP141 - a migration row is missing its source and/or target
+ *   BPP142 - source/target is not a tip name or a labelled internal node
+ *   BPP143 - source and target are the same population (self-migration)
+ *   BPP144 - a token where a numeric rate parameter was expected (e.g. a
+ *            third population name), or more than 5 parameters
+ */
+
+static int is_number_token(const char *s) {
+    if (!s || !*s) return 0;
+    char *end = NULL;
+    (void) strtod(s, &end);
+    return end && *end == '\0' && end != s;
+}
+
+/* Collect the set of valid migration population labels (tip names + explicit
+ * internal-node labels) from the species&tree Newick. Returns 1 if the tree
+ * parsed cleanly (plain, balanced Newick) so `out` is trustworthy; 0 if the
+ * names could not be determined, in which case name-existence checks should be
+ * skipped. `out` is populated (and must be freed by the caller) either way. */
+static int build_tree_labels(const bpp_file_t *f, bpp_strlist_t *out) {
+    const bpp_line_t *header = find_set_line(f, "species&tree");
+    if (!header || !header->value) return 0;
+
+    size_t header_idx = (size_t)(header - f->lines);
+    int counts_idx = next_content_line(f, header_idx + 1);
+    if (counts_idx < 0) return 0;
+    int newick_idx = next_content_line(f, (size_t) counts_idx + 1);
+    if (newick_idx < 0) return 0;
+
+    char *newick = bpp_strdup(f->lines[newick_idx].raw);
+    if (newick) {
+        for (char *p = newick; *p; p++) { if (*p == '*') { *p = '\0'; break; } }
+    }
+
+    bpp_strlist_t inner = {0};
+    int bal = 0, ext = 0, semi = 0;
+    walk_newick(newick ? newick : "", out, &bal, &ext, &semi, &inner);
+    free(newick);
+
+    if (ext || bal != 0) {   /* introgression or malformed: names unreliable */
+        strlist_free(&inner);
+        return 0;
+    }
+    for (int i = 0; i < inner.n; i++) {
+        (void) strlist_push(out, inner.items[i], (int) strlen(inner.items[i]));
+    }
+    strlist_free(&inner);
+    return 1;
+}
+
+/* 1-based column of `tok` in `raw`, searching from byte offset *from; advances
+ * *from past the match so repeated tokens resolve left-to-right. Falls back to
+ * column 1 if not found. */
+static int token_column(const char *raw, const char *tok, int *from) {
+    const char *hit = strstr(raw + *from, tok);
+    if (!hit) return 1;
+    *from = (int)(hit - raw) + (int) strlen(tok);
+    return (int)(hit - raw) + 1;
+}
+
+static void check_migration_block(const bpp_file_t *f,
+                                  bpp_diag_list_t *out, int *errors)
+{
+    const bpp_line_t *mig = find_set_line(f, "migration");
+    if (!mig || !mig->value) return;
+
+    int n_bands = first_int(mig->value);
+    if (n_bands <= 0) return;   /* migration off */
+
+    /* Valid population labels from the species tree. */
+    bpp_strlist_t labels = {0};
+    int names_known = build_tree_labels(f, &labels);
+
+    size_t cursor = (size_t)(mig - f->lines) + 1;
+    for (int band = 0; band < n_bands; band++) {
+        int row_idx = next_content_line(f, cursor);
+        if (row_idx < 0) {
+            emit(out, SEV_ERROR, mig->lineno, mig->key_col, "BPP140",
+                 xasprintf("'migration = %d' but only %d band row(s) found",
+                           n_bands, band),
+                 xasprintf("each of the %d declared bands needs a 'source target' row", n_bands),
+                 NULL, 0);
+            (*errors)++;
+            break;
+        }
+        const bpp_line_t *row = &f->lines[row_idx];
+        cursor = (size_t) row_idx + 1;
+
+        /* Tokenise the row on whitespace and commas (BPP splits on both). */
+        char *norm = bpp_strdup(row->raw);
+        if (norm) {
+            for (char *p = norm; *p; p++) {
+                if (*p == '*' || *p == '#') { *p = '\0'; break; }   /* comment */
+            }
+            for (char *p = norm; *p; p++) { if (*p == ',') *p = ' '; }
+        }
+        char *toks[64];
+        int ntok = bpp_tokenise_value(norm ? norm : "", toks, 64);
+        free(norm);
+
+        if (ntok < 2) {
+            emit(out, SEV_ERROR, row->lineno, 1, "BPP141",
+                 xasprintf("migration band %d is incomplete (need 'source target')",
+                           band + 1),
+                 NULL, NULL, 0);
+            (*errors)++;
+            bpp_tokens_free(toks, ntok);
+            continue;
+        }
+
+        const char *source = toks[0];
+        const char *target = toks[1];
+        int col_from = 0;
+        int src_col = token_column(row->raw, source, &col_from);
+        int tgt_col = token_column(row->raw, target, &col_from);
+
+        /* Tokens after source/target must be numeric rate parameters. A
+         * non-numeric one is almost always a stray third population name. */
+        int nparams = ntok - 2;
+        for (int k = 2; k < ntok; k++) {
+            if (!is_number_token(toks[k])) {
+                int c_from = 0;
+                int col = token_column(row->raw, toks[k], &c_from);
+                emit(out, SEV_ERROR, row->lineno, col, "BPP144",
+                     xasprintf("migration band %d: unexpected token '%s'",
+                               band + 1, toks[k]),
+                     xasprintf("a row is 'source target' plus 0-5 numeric rate parameters; "
+                               "a migration connection has exactly two populations"),
+                     NULL, 0);
+                (*errors)++;
+                break;   /* one report per row is enough */
+            }
+        }
+        if (nparams > 5) {
+            emit(out, SEV_ERROR, row->lineno, 1, "BPP144",
+                 xasprintf("migration band %d has %d numeric parameters (at most 5 allowed)",
+                           band + 1, nparams),
+                 NULL, NULL, 0);
+            (*errors)++;
+        }
+
+        if (strcmp(source, target) == 0) {
+            emit(out, SEV_ERROR, row->lineno, src_col, "BPP143",
+                 xasprintf("migration band %d connects population '%s' to itself",
+                           band + 1, source),
+                 xasprintf("source and target must be different populations"),
+                 NULL, 0);
+            (*errors)++;
+        }
+
+        if (names_known) {
+            if (!strlist_contains(&labels, source)) {
+                emit(out, SEV_ERROR, row->lineno, src_col, "BPP142",
+                     xasprintf("migration source '%s' is not a species-tree population",
+                               source),
+                     xasprintf("use a tip name or an internal node labelled in the Newick "
+                               "(ancestral nodes used in migration must be labelled)"),
+                     NULL, 0);
+                (*errors)++;
+            }
+            if (!strlist_contains(&labels, target)) {
+                emit(out, SEV_ERROR, row->lineno, tgt_col, "BPP142",
+                     xasprintf("migration target '%s' is not a species-tree population",
+                               target),
+                     xasprintf("use a tip name or an internal node labelled in the Newick "
+                               "(ancestral nodes used in migration must be labelled)"),
+                     NULL, 0);
+                (*errors)++;
+            }
+        }
+
+        bpp_tokens_free(toks, ntok);
+    }
+
+    strlist_free(&labels);
 }
 
 /* ---------- main lint pass ---------- */
@@ -1325,6 +1524,11 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
     if (!opts->simulate) {
         check_species_tree_block(f, out, &errors);
     }
+
+    /* migration (MSC-M) block: band count, row shape, and source/target
+     * populations resolvable in the species tree. Applies to both inference
+     * and --simulate control files. */
+    check_migration_block(f, out, &errors);
 
     return errors;
 }

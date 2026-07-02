@@ -259,6 +259,38 @@ static const bpp_code_doc_t codes[] = {
       "hybrid-node markers) is not yet validated by bpp-lint. The block is\n"
       "left to BPP's parser. Header/counts checks still run." },
 
+    /* 14x: migration (MSC-M) block */
+    { "140",
+      "migration declares more bands than there are rows.",
+      "A 'migration = N' line must be followed by N rows, each naming a\n"
+      "source and target population. Fewer rows than N were found before the\n"
+      "block ended. Add the missing rows or lower N." },
+
+    { "141",
+      "migration band row is missing its source and/or target population.",
+      "Each migration row is 'source target' (optionally followed by numeric\n"
+      "rate parameters). This row had fewer than two tokens." },
+
+    { "142",
+      "migration source/target is not a species-tree population.",
+      "The source and target of a migration band must be a species-tree tip\n"
+      "name or an internal node that is *labelled* in the Newick. Ancestral\n"
+      "nodes involved in migration must be given a label (e.g. '((A,B)S,C)R;'),\n"
+      "because BPP's auto-generated comma-joined labels cannot be referenced.\n"
+      "BPP itself aborts with 'Cannot create migration band' for an unknown\n"
+      "name." },
+
+    { "143",
+      "migration connects a population to itself.",
+      "The source and target of a migration band must differ. BPP rejects a\n"
+      "self-loop with 'Cannot create migration from one species to itself'." },
+
+    { "144",
+      "unexpected token in a migration row (extra population or bad parameter).",
+      "After 'source target', a migration row may carry 0-5 numeric rate\n"
+      "parameters and nothing else. A non-numeric token here is usually a\n"
+      "third population name -- a migration connection is strictly pairwise." },
+
     { "111",
       "tauprior is far too diffuse vs the data upper bound (--check-priors).",
       "Triggered when --check-priors is passed and the existing tauprior's\n"

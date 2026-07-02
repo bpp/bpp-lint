@@ -35,6 +35,32 @@ struct Diagnostic: Identifiable, Hashable {
     static func == (a: Diagnostic, b: Diagnostic) -> Bool { a.id == b.id }
 }
 
+extension Diagnostic {
+    // For a BPP103 "using default" warning, the explicit assignment that would
+    // silence it, as (keyword, literal value). Returns nil for anything that
+    // isn't a fillable default, or whose default has no concrete literal --
+    // e.g. `phase`'s "0 ... 0 (all phased)". The human annotation in
+    // parentheses (" (strict)", " (fixed)") is stripped so the inserted value
+    // is real syntax, not prose.
+    var defaultAssignment: (keyword: String, value: String)? {
+        guard code == "103" else { return nil }
+        let ns = message as NSString
+        let re = try! NSRegularExpression(
+            pattern: "^'([^']+)' not set; using default '(.*)'$")
+        guard let m = re.firstMatch(in: message,
+                                    range: NSRange(location: 0, length: ns.length)),
+              m.numberOfRanges >= 3 else { return nil }
+        let kw = ns.substring(with: m.range(at: 1))
+        var value = ns.substring(with: m.range(at: 2))
+        if let paren = value.range(of: #"\s*\([^)]*\)\s*$"#, options: .regularExpression) {
+            value.removeSubrange(paren)
+        }
+        value = value.trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty, !value.contains("...") else { return nil }
+        return (kw, value)
+    }
+}
+
 struct LintResult {
     var diagnostics: [Diagnostic]
     var failure: String?   // non-nil only if the linter itself couldn't run

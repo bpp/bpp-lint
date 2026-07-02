@@ -1,13 +1,23 @@
 import SwiftUI
 import AppKit
 
+// A request to move the editor selection to a specific 1-based line (and
+// optional column). `seq` increases monotonically so that re-selecting the
+// same location still forces `updateNSView` to act -- SwiftUI only re-applies
+// when a value changes, and line/column alone may repeat.
+struct JumpRequest: Equatable {
+    var line: Int
+    var column: Int?
+    var seq: Int
+}
+
 // SwiftUI wrapper around NSTextView so we can apply per-character styling.
-// Two-way binds `text`; `highlightedLine` optionally scrolls / shades a line
-// (used when a diagnostic is selected in the side panel); `diagnostics`
-// paints wavy underlines under offending tokens with a hover tooltip.
+// Two-way binds `text`; `jump` scrolls to and selects a token (used when a
+// diagnostic -- or one of its related references -- is clicked in the side
+// panel); `diagnostics` paints wavy underlines under offending tokens.
 struct CtlEditor: NSViewRepresentable {
     @Binding var text: String
-    var highlightedLine: Int?
+    var jump: JumpRequest?
     var diagnostics: [Diagnostic] = []
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -73,8 +83,13 @@ struct CtlEditor: NSViewRepresentable {
             Self.applyDiagnostics(diagsSnapshot, to: storage, in: tv)
         }
 
-        if let line = highlightedLine {
-            scrollTo(line: line, in: tv)
+        if let j = jump, j.seq != context.coordinator.lastJumpSeq {
+            context.coordinator.lastJumpSeq = j.seq
+            let coord = context.coordinator
+            DispatchQueue.main.async { [weak tv, weak coord] in
+                guard let tv = tv, let coord = coord else { return }
+                coord.jumpHighlightRange = Self.jump(to: j, in: tv)
+            }
         }
     }
 
@@ -169,7 +184,29 @@ struct CtlEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CtlEditor
+        // Sequence number of the last jump we applied. A JumpRequest whose
+        // `seq` matches this has already been handled and is ignored, so we
+        // never fight the user's own scrolling on every re-render.
+        var lastJumpSeq: Int = -1
+        // Range of the current red jump highlight (a full line), kept so we can
+        // clear it when the user moves the caret off that line.
+        var jumpHighlightRange: NSRange?
         init(parent: CtlEditor) { self.parent = parent }
+
+        // Clear the red jump highlight once the user clicks or selects away
+        // from the highlighted line. A programmatic jump leaves the caret on
+        // that line (and updates `jumpHighlightRange` only afterward), so this
+        // fires only for user-driven selection changes elsewhere.
+        func textViewDidChangeSelection(_ note: Notification) {
+            guard let tv = note.object as? NSTextView,
+                  let storage = tv.textStorage,
+                  let hr = jumpHighlightRange else { return }
+            let loc = tv.selectedRange().location
+            if loc >= hr.location && loc <= hr.location + hr.length { return }
+            storage.removeAttribute(.backgroundColor,
+                                    range: NSRange(location: 0, length: storage.length))
+            jumpHighlightRange = nil
+        }
 
         func textDidChange(_ note: Notification) {
             guard let tv = note.object as? NSTextView,
@@ -178,6 +215,8 @@ struct CtlEditor: NSViewRepresentable {
             // the keystroke. Attribute-only changes do NOT retrigger
             // textDidChange, so this is safe.
             BppCtlHighlighter.apply(to: storage, baseFont: tv.font)
+            // The restyle wiped the background highlight; drop our record of it.
+            jumpHighlightRange = nil
 
             // Defer the SwiftUI state write to the next runloop tick.
             // Writing into a @State binding synchronously from inside an
@@ -192,19 +231,96 @@ struct CtlEditor: NSViewRepresentable {
         }
     }
 
-    private func scrollTo(line: Int, in tv: NSTextView) {
+    // Scroll to the token described by `req` and highlight it with a red
+    // background. The caret is moved (zero-length) so there is no grey
+    // selection band; the red highlight is cleared on the next jump here and
+    // whenever the text is restyled on the next edit (see BppCtlHighlighter).
+    static let jumpHighlightColor = NSColor.systemRed.withAlphaComponent(0.30)
+
+    // Returns the range actually highlighted (a full line), so the coordinator
+    // can track it and clear it when the user selects away from that line.
+    @discardableResult
+    private static func jump(to req: JumpRequest, in tv: NSTextView) -> NSRange? {
+        guard let storage = tv.textStorage else { return nil }
+        let full = NSRange(location: 0, length: storage.length)
+
+        // Always clear any previous highlight first. A request with line < 1 is
+        // a clear-only request -- e.g. the user selected a diagnostic that has
+        // no source location -- so we stop here.
+        storage.beginEditing()
+        storage.removeAttribute(.backgroundColor, range: full)
+        storage.endEditing()
+        guard req.line >= 1 else { return nil }
+
         let nsStr = tv.string as NSString
-        var currentLine = 1
-        var location = 0
-        nsStr.enumerateSubstrings(in: NSRange(location: 0, length: nsStr.length),
-                                  options: [.byLines, .substringNotRequired]) { _, lineRange, _, stop in
-            if currentLine == line {
-                location = lineRange.location
-                stop.pointee = true
-            }
-            currentLine += 1
+        let range: NSRange
+        if let col = req.column, let r = tokenRange(line: req.line, column: col, in: nsStr) {
+            range = r
+        } else if let r = lineContentRange(line: req.line, in: nsStr) {
+            range = r
+        } else {
+            return nil
         }
-        tv.scrollRangeToVisible(NSRange(location: location, length: 0))
+        tv.setSelectedRange(NSRange(location: range.location, length: 0))
+        tv.scrollRangeToVisible(range)
+
+        // Highlight the whole line (not just the token) in red.
+        let highlight = fullLineRange(line: req.line, in: nsStr) ?? range
+        var applied: NSRange? = nil
+        storage.beginEditing()
+        if highlight.length > 0, highlight.location + highlight.length <= storage.length {
+            storage.addAttribute(.backgroundColor, value: jumpHighlightColor, range: highlight)
+            applied = highlight
+        }
+        storage.endEditing()
+        return applied
+    }
+
+    // Full range of a 1-based `line`, from its first character to end of line
+    // (excluding the trailing newline).
+    private static func fullLineRange(line: Int, in str: NSString) -> NSRange? {
+        let total = str.length
+        guard line >= 1, total > 0 else { return nil }
+        var lineStart = 0
+        var current = 1
+        while current < line {
+            let r = str.range(of: "\n",
+                              range: NSRange(location: lineStart, length: total - lineStart))
+            if r.location == NSNotFound { return nil }
+            lineStart = r.location + 1
+            current += 1
+        }
+        let rest = NSRange(location: lineStart, length: total - lineStart)
+        let nl = str.range(of: "\n", range: rest)
+        let lineEnd = (nl.location == NSNotFound) ? total : nl.location
+        return NSRange(location: lineStart, length: lineEnd - lineStart)
+    }
+
+    // Range covering the non-whitespace content of a 1-based `line`, used when
+    // a related reference carries no specific column.
+    private static func lineContentRange(line: Int, in str: NSString) -> NSRange? {
+        let total = str.length
+        guard line >= 1, total > 0 else { return nil }
+        var lineStart = 0
+        var current = 1
+        while current < line {
+            let r = str.range(of: "\n",
+                              range: NSRange(location: lineStart, length: total - lineStart))
+            if r.location == NSNotFound { return nil }
+            lineStart = r.location + 1
+            current += 1
+        }
+        let rest = NSRange(location: lineStart, length: total - lineStart)
+        let nl = str.range(of: "\n", range: rest)
+        let lineEnd = (nl.location == NSNotFound) ? total : nl.location
+        var s = lineStart
+        while s < lineEnd {
+            let c = str.character(at: s)
+            if c != 0x20 && c != 0x09 { break }
+            s += 1
+        }
+        if s >= lineEnd { return NSRange(location: lineStart, length: 0) }
+        return NSRange(location: s, length: lineEnd - s)
     }
 }
 
@@ -229,6 +345,9 @@ enum BppCtlHighlighter {
         // Reset to a clean baseline before reapplying per-line styling.
         storage.removeAttribute(.foregroundColor, range: full)
         storage.removeAttribute(.font, range: full)
+        // Also clear any lingering jump highlight so it can't strand itself on
+        // shifted character ranges after an edit.
+        storage.removeAttribute(.backgroundColor, range: full)
         if let f = baseFont {
             storage.addAttribute(.font, value: f, range: full)
         }

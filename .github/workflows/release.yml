@@ -139,17 +139,42 @@ jobs:
     # Skip pre-release tags (anything with a '-', e.g. v0.2.0-rc1).
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
-      - name: Update bpp/homebrew-tap
-        uses: mislav/bump-homebrew-formula-action@v3
-        with:
-          formula-name: bpp-lint
-          formula-path: Formula/bpp-lint.rb
-          homebrew-tap: bpp/homebrew-tap
-          tag-name: ${{ github.ref_name }}
-          download-url: https://github.com/bpp/bpp-lint/archive/refs/tags/${{ github.ref_name }}.tar.gz
-          commit-message: |
-            bpp-lint {{version}}
-
-            Created by bpp/bpp-lint release workflow.
+      # Push the formula bump straight to bpp/homebrew-tap. This replaces
+      # mislav/bump-homebrew-formula-action, which returns an unexpected HTTP
+      # 303 against our org-owned tap (it tries to fork a repo the token
+      # already has push access to). HOMEBREW_TAP_TOKEN is a classic PAT with
+      # the `repo` scope and push access to bpp/homebrew-tap. The formula
+      # builds from the source tarball, so its sha256 is the checksum of the
+      # GitHub archive, not of the release binaries.
+      - name: Bump formula in bpp/homebrew-tap
         env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VER="${TAG#v}"
+          URL="https://github.com/bpp/bpp-lint/archive/refs/tags/${TAG}.tar.gz"
+          curl -fsSL -o src.tar.gz "$URL"
+          SHA="$(sha256sum src.tar.gz | awk '{print $1}')"
+          echo "bumping formula to ${VER} (sha256 ${SHA})"
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/bpp/homebrew-tap.git" tap
+          cd tap
+          python3 - "$URL" "$SHA" <<'PY'
+          import re, sys
+          url, sha = sys.argv[1], sys.argv[2]
+          path = "Formula/bpp-lint.rb"
+          s = open(path).read()
+          s = re.sub(r'^(\s*)url ".*"$', lambda m: m.group(1) + f'url "{url}"',
+                     s, count=1, flags=re.M)
+          s = re.sub(r'sha256 "[0-9a-f]{64}"', f'sha256 "{sha}"', s, count=1)
+          open(path, "w").write(s)
+          PY
+          git config user.name  "bpp-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Formula already at ${VER}; nothing to do."
+            exit 0
+          fi
+          git commit -am "bpp-lint ${VER}"
+          git push origin HEAD:main

@@ -47,29 +47,26 @@ Release with `SHA256SUMS`, and then bumps the Homebrew formula in
 
 ## Homebrew auto-bump (the `HOMEBREW_TAP_TOKEN` secret)
 
-The final job uses
-[`mislav/bump-homebrew-formula-action`](https://github.com/mislav/bump-homebrew-formula-action),
-which pushes a commit and opens a PR on `bpp/homebrew-tap`. It authenticates
-with the repository secret **`HOMEBREW_TAP_TOKEN`** (passed as
-`COMMITTER_TOKEN`). The token must belong to an account with **write access to
-`bpp/homebrew-tap`** and grant **Contents: write** and **Pull requests: write**
-on it.
+The final `bump-homebrew` job **pushes the formula bump directly** to
+`bpp/homebrew-tap` (clone → rewrite `url`/`sha256` → commit → push to `main`).
+It authenticates with the repository secret **`HOMEBREW_TAP_TOKEN`**.
+
+> **Why not `mislav/bump-homebrew-formula-action`?** We used it originally, but
+> it returns `unexpected HTTP 303` against this tap: the action tries to *fork*
+> `bpp/homebrew-tap`, which fails because the token owner already has push
+> access within the org. The direct-push step avoids that entirely.
 
 ### Create the token
 
-**Option A — classic PAT (simplest for the org tap):**
+Use a **classic PAT** owned by an account with **push access to
+`bpp/homebrew-tap`**:
 
 1. <https://github.com/settings/tokens> → *Generate new token (classic)*.
-2. Scope: check **`repo`** (covers contents + PRs). Set an expiration.
+2. Scope: check **`repo`**. Set an expiration.
 3. Generate and copy.
 
-**Option B — fine-grained PAT:**
-
-1. <https://github.com/settings/personal-access-tokens/new>.
-2. **Resource owner:** `bpp`. If the org requires approval, an org owner must
-   approve the token — until then it returns `401`/`403`.
-3. **Repository access:** only `bpp/homebrew-tap`.
-4. **Permissions:** Contents → Read and write; Pull requests → Read and write.
+(A fine-grained PAT with Contents: write on the tap also works for the
+direct-push step, but classic `repo` is simplest.)
 
 ### Store the secret
 
@@ -88,13 +85,14 @@ gh run rerun <release-run-id> --failed --repo bpp/bpp-lint
 
 ### Troubleshooting
 
-- **`401 unexpected`** — bad credentials: expired, mistyped/truncated, or a
-  fine-grained token still pending org approval. Regenerate (Option A is least
-  error-prone).
-- **`403`** — authenticated but lacks write on `bpp/homebrew-tap`, or missing
-  Contents/PR write.
-- In the job log, `COMMITTER_TOKEN:` should print `***` (value present); blank
-  means the secret is empty.
+- **`403` / auth failures on `git push`** — the token is expired, mistyped, or
+  its account lacks push access to `bpp/homebrew-tap`. Regenerate a classic
+  `repo` PAT from an account with write on the tap.
+- **`fatal: could not read Username`** — the `HOMEBREW_TAP_TOKEN` secret is
+  empty. Re-set it (see above; use `printf` to avoid a trailing newline).
+- **historical `unexpected HTTP 303`** — came from the old
+  `mislav/bump-homebrew-formula-action` trying to fork the org-owned tap; the
+  direct-push job no longer has this problem.
 
 ## Manual formula bump (fallback when the token is broken)
 

@@ -259,6 +259,19 @@ static const bpp_code_doc_t codes[] = {
       "hybrid-node markers) is not yet validated by bpp-lint. The block is\n"
       "left to BPP's parser. Header/counts checks still run." },
 
+    { "137",
+      "species&tree Newick is not a strictly binary tree.",
+      "BPP species trees must be bifurcating: every internal node has exactly\n"
+      "two child branches. This fires for a polytomy (a node with three or\n"
+      "more children, e.g. '(A,B,C)') or a redundant unary node (one child).\n"
+      "Rewrite the polytomy as a series of nested binary splits." },
+
+    { "138",
+      "species&tree Newick has a duplicate tip name.",
+      "A species name appears more than once as a leaf of the Newick tree.\n"
+      "Each species must occur exactly once. (This often also shows up as a\n"
+      "BPP135 leaf-count mismatch; BPP138 names the offending tip.)" },
+
     /* 14x: migration (MSC-M) block */
     { "140",
       "migration declares more bands than there are rows.",
@@ -290,6 +303,21 @@ static const bpp_code_doc_t codes[] = {
       "After 'source target', a migration row may carry 0-5 numeric rate\n"
       "parameters and nothing else. A non-numeric token here is usually a\n"
       "third population name -- a migration connection is strictly pairwise." },
+
+    { "145",
+      "migration connects an ancestor and one of its descendants.",
+      "A migration band must join two populations that coexist in time. A\n"
+      "node and any of its ancestors occupy disjoint time intervals (the\n"
+      "descendant's branch ends exactly where the ancestor's begins), so the\n"
+      "band could never carry a single migrant. BPP's parser accepts this\n"
+      "silently, leaving a rate parameter that is always inactive -- almost\n"
+      "always a mistake. Choose two branches on different lineages." },
+
+    { "146",
+      "migration band is a duplicate of an earlier one (same source->target).",
+      "The same ordered source/target pair is listed more than once in the\n"
+      "migration block. The repeat is redundant (and its rate parameters are\n"
+      "ambiguous); keep a single row per directed connection." },
 
     { "111",
       "tauprior is far too diffuse vs the data upper bound (--check-priors).",

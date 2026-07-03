@@ -1172,6 +1172,13 @@ static void check_species_tree_block(const bpp_file_t *f,
  *   BPP143 - source and target are the same population (self-migration)
  *   BPP144 - a token where a numeric rate parameter was expected (e.g. a
  *            third population name), or more than 5 parameters
+ *   BPP145 - source and target are in an ancestor-descendant relationship
+ *            (they never coexist in time, so the band can never be active)
+ *   BPP146 - the same source->target band is listed more than once (warning)
+ *
+ * BPP's own parser accepts an ancestor-descendant band silently (method.c
+ * checks only not-found and self-loop), so BPP145 catches a modelling error
+ * BPP will not. The ancestor test mirrors bpp-tree's miglist_apply.
  */
 
 static int is_number_token(const char *s) {
@@ -1181,17 +1188,113 @@ static int is_number_token(const char *s) {
     return end && *end == '\0' && end != s;
 }
 
-/* Collect the set of valid migration population labels (tip names + explicit
- * internal-node labels) from the species&tree Newick. Returns 1 if the tree
- * parsed cleanly (plain, balanced Newick) so `out` is trustworthy; 0 if the
- * names could not be determined, in which case name-existence checks should be
- * skipped. `out` is populated (and must be freed by the caller) either way. */
-static int build_tree_labels(const bpp_file_t *f, bpp_strlist_t *out) {
+/* A minimal species tree recovered from the Newick -- just enough to test
+ * ancestor/descendant relationships between migration populations. Each node
+ * carries its label (NULL for an unlabelled internal node) and its parent. */
+typedef struct {
+    char *label;
+    int   parent;   /* index of parent node, or -1 for the root */
+    int   is_leaf;
+} mig_tnode_t;
+
+typedef struct { mig_tnode_t *nodes; int n, cap; } mig_tree_t;
+
+static int mtree_add(mig_tree_t *t, const char *label, int len, int parent, int is_leaf) {
+    if (t->n >= t->cap) {
+        int nc = t->cap ? t->cap * 2 : 16;
+        mig_tnode_t *nn = realloc(t->nodes, (size_t) nc * sizeof(mig_tnode_t));
+        if (!nn) return -1;
+        t->nodes = nn; t->cap = nc;
+    }
+    mig_tnode_t *nd = &t->nodes[t->n];
+    nd->label = NULL;
+    if (label && len > 0) {
+        nd->label = malloc((size_t) len + 1);
+        if (nd->label) { memcpy(nd->label, label, (size_t) len); nd->label[len] = '\0'; }
+    }
+    nd->parent = parent;
+    nd->is_leaf = is_leaf;
+    return t->n++;
+}
+
+static void mtree_free(mig_tree_t *t) {
+    for (int i = 0; i < t->n; i++) free(t->nodes[i].label);
+    free(t->nodes);
+    t->nodes = NULL; t->n = t->cap = 0;
+}
+
+/* Build a tree from a plain Newick string. Returns 1 on success, 0 if the
+ * string is malformed or uses extended-Newick markers (in which case name and
+ * ancestor checks are skipped). Internal-node labels follow their ')'. */
+static int mtree_build(const char *s, mig_tree_t *t) {
+    int stack[256], sp = 0;      /* indices of currently-open internal nodes */
+    int depth = 0, last_closed = -1;
+    enum { C_LEAF, C_INTERNAL } ctx = C_LEAF;
+
+    while (*s) {
+        unsigned char c = (unsigned char) *s;
+        if (isspace(c)) { s++; continue; }
+        if (c == '(') {
+            int parent = sp > 0 ? stack[sp - 1] : -1;
+            int idx = mtree_add(t, NULL, 0, parent, 0);
+            if (idx < 0 || sp >= (int)(sizeof(stack) / sizeof(stack[0]))) return 0;
+            stack[sp++] = idx;
+            depth++; ctx = C_LEAF; s++; continue;
+        }
+        if (c == ')') {
+            if (--depth < 0 || sp <= 0) return 0;
+            last_closed = stack[--sp];
+            ctx = C_INTERNAL; s++; continue;
+        }
+        if (c == ',') { ctx = C_LEAF; s++; continue; }
+        if (c == ';') { s++; break; }
+        if (c == ':') { s++; while (*s && *s != ',' && *s != ')' && *s != ';') s++; continue; }
+        if (c == '&' || c == '#') return 0;   /* extended Newick */
+        if (isalnum(c) || c == '_' || c == '-' || c == '.') {
+            const char *start = s;
+            while (*s && (isalnum((unsigned char) *s) || *s == '_' ||
+                          *s == '-' || *s == '.')) s++;
+            int len = (int)(s - start);
+            if (ctx == C_INTERNAL) {
+                if (last_closed >= 0 && !t->nodes[last_closed].label) {
+                    t->nodes[last_closed].label = malloc((size_t) len + 1);
+                    if (t->nodes[last_closed].label) {
+                        memcpy(t->nodes[last_closed].label, start, (size_t) len);
+                        t->nodes[last_closed].label[len] = '\0';
+                    }
+                }
+            } else {
+                int parent = sp > 0 ? stack[sp - 1] : -1;
+                if (mtree_add(t, start, len, parent, 1) < 0) return 0;
+            }
+            continue;
+        }
+        s++;
+    }
+    return depth == 0 && t->n > 0;
+}
+
+static int mtree_find(const mig_tree_t *t, const char *label) {
+    for (int i = 0; i < t->n; i++)
+        if (t->nodes[i].label && strcmp(t->nodes[i].label, label) == 0) return i;
+    return -1;
+}
+
+/* True if node `a` lies on the path from `b` up to the root (a is an ancestor
+ * of b). Mirrors bpp-tree's is_anc. */
+static int mtree_is_ancestor(const mig_tree_t *t, int a, int b) {
+    for (int p = b; p != -1; p = t->nodes[p].parent)
+        if (p == a) return 1;
+    return 0;
+}
+
+/* Locate the species&tree Newick line and build a tree from it. Returns 1 on
+ * success; on failure `t` is left empty. */
+static int mtree_build_from_file(const bpp_file_t *f, mig_tree_t *t) {
     const bpp_line_t *header = find_set_line(f, "species&tree");
     if (!header || !header->value) return 0;
-
-    size_t header_idx = (size_t)(header - f->lines);
-    int counts_idx = next_content_line(f, header_idx + 1);
+    size_t hidx = (size_t)(header - f->lines);
+    int counts_idx = next_content_line(f, hidx + 1);
     if (counts_idx < 0) return 0;
     int newick_idx = next_content_line(f, (size_t) counts_idx + 1);
     if (newick_idx < 0) return 0;
@@ -1200,21 +1303,71 @@ static int build_tree_labels(const bpp_file_t *f, bpp_strlist_t *out) {
     if (newick) {
         for (char *p = newick; *p; p++) { if (*p == '*') { *p = '\0'; break; } }
     }
-
-    bpp_strlist_t inner = {0};
-    int bal = 0, ext = 0, semi = 0;
-    walk_newick(newick ? newick : "", out, &bal, &ext, &semi, &inner);
+    int ok = mtree_build(newick ? newick : "", t);
     free(newick);
+    if (!ok) mtree_free(t);
+    return ok;
+}
 
-    if (ext || bal != 0) {   /* introgression or malformed: names unreliable */
-        strlist_free(&inner);
-        return 0;
+/* Structural checks on the species&tree Newick that need the tree shape:
+ *   BPP137 - a node that is not strictly binary (a polytomy or unary node);
+ *            BPP species trees must be bifurcating
+ *   BPP138 - a tip name that appears more than once
+ * Runs only when the Newick parses cleanly (plain, balanced); malformed or
+ * extended-Newick trees are handled by BPP134/BPP136. */
+static void check_tree_structure(const bpp_file_t *f,
+                                 bpp_diag_list_t *out, int *errors)
+{
+    const bpp_line_t *header = find_set_line(f, "species&tree");
+    if (!header || !header->value) return;
+    size_t hidx = (size_t)(header - f->lines);
+    int counts_idx = next_content_line(f, hidx + 1);
+    if (counts_idx < 0) return;
+    int newick_idx = next_content_line(f, (size_t) counts_idx + 1);
+    if (newick_idx < 0) return;
+    const bpp_line_t *nline = &f->lines[newick_idx];
+
+    mig_tree_t tree = {0};
+    if (!mtree_build_from_file(f, &tree)) { mtree_free(&tree); return; }
+
+    /* Polytomy / unary node: each internal node must have exactly 2 children. */
+    for (int i = 0; i < tree.n; i++) {
+        if (tree.nodes[i].is_leaf) continue;
+        int nchild = 0;
+        for (int j = 0; j < tree.n; j++) if (tree.nodes[j].parent == i) nchild++;
+        if (nchild != 2) {
+            char *msg = tree.nodes[i].label
+                ? xasprintf("'species&tree' Newick is not binary: node '%s' has "
+                            "%d child branch(es), expected 2", tree.nodes[i].label, nchild)
+                : xasprintf("'species&tree' Newick is not binary: an internal node has "
+                            "%d child branch(es), expected 2", nchild);
+            emit(out, SEV_ERROR, nline->lineno, 1, "BPP137", msg,
+                 xasprintf("BPP species trees must be strictly bifurcating; "
+                           "rewrite polytomies as nested binary splits"),
+                 NULL, 0);
+            (*errors)++;
+        }
     }
-    for (int i = 0; i < inner.n; i++) {
-        (void) strlist_push(out, inner.items[i], (int) strlen(inner.items[i]));
+
+    /* Duplicate tip names. */
+    for (int i = 0; i < tree.n; i++) {
+        if (!tree.nodes[i].is_leaf || !tree.nodes[i].label) continue;
+        int dup = 0;
+        for (int j = 0; j < i; j++) {
+            if (tree.nodes[j].is_leaf && tree.nodes[j].label &&
+                strcmp(tree.nodes[j].label, tree.nodes[i].label) == 0) { dup = 1; break; }
+        }
+        if (dup) {
+            emit(out, SEV_ERROR, nline->lineno, 1, "BPP138",
+                 xasprintf("'species&tree' Newick has a duplicate tip name '%s'",
+                           tree.nodes[i].label),
+                 xasprintf("each species must appear exactly once as a leaf"),
+                 NULL, 0);
+            (*errors)++;
+        }
     }
-    strlist_free(&inner);
-    return 1;
+
+    mtree_free(&tree);
 }
 
 /* 1-based column of `tok` in `raw`, searching from byte offset *from; advances
@@ -1236,9 +1389,12 @@ static void check_migration_block(const bpp_file_t *f,
     int n_bands = first_int(mig->value);
     if (n_bands <= 0) return;   /* migration off */
 
-    /* Valid population labels from the species tree. */
-    bpp_strlist_t labels = {0};
-    int names_known = build_tree_labels(f, &labels);
+    /* Species tree, for name-existence and ancestor/descendant checks. */
+    mig_tree_t tree = {0};
+    int names_known = mtree_build_from_file(f, &tree);
+
+    /* "source\x01target" keys of bands already seen, to flag duplicates. */
+    bpp_strlist_t seen_bands = {0};
 
     size_t cursor = (size_t)(mig - f->lines) + 1;
     for (int band = 0; band < n_bands; band++) {
@@ -1318,7 +1474,9 @@ static void check_migration_block(const bpp_file_t *f,
         }
 
         if (names_known) {
-            if (!strlist_contains(&labels, source)) {
+            int si = mtree_find(&tree, source);
+            int ti = mtree_find(&tree, target);
+            if (si < 0) {
                 emit(out, SEV_ERROR, row->lineno, src_col, "BPP142",
                      xasprintf("migration source '%s' is not a species-tree population",
                                source),
@@ -1327,7 +1485,7 @@ static void check_migration_block(const bpp_file_t *f,
                      NULL, 0);
                 (*errors)++;
             }
-            if (!strlist_contains(&labels, target)) {
+            if (ti < 0) {
                 emit(out, SEV_ERROR, row->lineno, tgt_col, "BPP142",
                      xasprintf("migration target '%s' is not a species-tree population",
                                target),
@@ -1336,12 +1494,42 @@ static void check_migration_block(const bpp_file_t *f,
                      NULL, 0);
                 (*errors)++;
             }
+            /* Both resolve and differ: an ancestor-descendant pair never
+             * coexists in time, so the band can never be active. BPP's parser
+             * does not catch this. */
+            if (si >= 0 && ti >= 0 && si != ti &&
+                (mtree_is_ancestor(&tree, si, ti) || mtree_is_ancestor(&tree, ti, si))) {
+                emit(out, SEV_ERROR, row->lineno, src_col, "BPP145",
+                     xasprintf("migration band %d: '%s' and '%s' are ancestor and "
+                               "descendant and never coexist in time",
+                               band + 1, source, target),
+                     xasprintf("a band must connect two non-nested (contemporaneous) "
+                               "branches; pick populations on different lineages"),
+                     NULL, 0);
+                (*errors)++;
+            }
+        }
+
+        /* Duplicate band: the same source->target pair listed earlier. */
+        char *key = xasprintf("%s\x01%s", source, target);
+        if (key) {
+            if (strlist_contains(&seen_bands, key)) {
+                emit(out, SEV_WARNING, row->lineno, src_col, "BPP146",
+                     xasprintf("migration band %d duplicates an earlier '%s -> %s' band",
+                               band + 1, source, target),
+                     xasprintf("each source/target pair should appear at most once"),
+                     NULL, 0);
+            } else {
+                (void) strlist_push(&seen_bands, key, (int) strlen(key));
+            }
+            free(key);
         }
 
         bpp_tokens_free(toks, ntok);
     }
 
-    strlist_free(&labels);
+    strlist_free(&seen_bands);
+    mtree_free(&tree);
 }
 
 /* ---------- main lint pass ---------- */
@@ -1523,6 +1711,7 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
      * --simulate file uses a separate treefile path). */
     if (!opts->simulate) {
         check_species_tree_block(f, out, &errors);
+        check_tree_structure(f, out, &errors);
     }
 
     /* migration (MSC-M) block: band count, row shape, and source/target

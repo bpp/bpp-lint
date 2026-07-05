@@ -58,7 +58,7 @@ static const bpp_keyword_t kw_table[] = {
       "'<N>' header + N rows: 'source target [a b] [a_w] [pa pb]'.", 0, "0" },
     { "traitfile",           KW_VALID, MODE_INFER, NULL, NULL, 0, NULL },
     { "thetaprior",          KW_VALID, MODE_INFER, NULL,
-      "'invgamma a b [e]' | 'gamma a b' | 'beta p q lo hi'. v4.8.2+ requires invgamma alpha > 2.", 482, NULL },
+      "'invgamma a b [int]' | 'gamma a b'. 'int' (v4.8.2+) integrates theta analytically; 'e' is now a no-op. invgamma requires alpha > 2. The 'beta p q l u' prior was removed in v4.8.0.", 482, NULL },
     { "checkpoint",          KW_VALID, MODE_INFER, NULL, NULL, 0, NULL },
     { "alphaprior",          KW_VALID, MODE_INFER, NULL, NULL, 0, NULL },
     { "thetamodel",          KW_VALID, MODE_INFER, NULL,
@@ -87,6 +87,7 @@ static const bpp_keyword_t kw_table[] = {
     { "loci&length",         KW_VALID_SIM, MODE_SIM, NULL, NULL, 0, NULL },
     { "modelparafile",       KW_VALID_SIM, MODE_SIM, NULL, NULL, 0, NULL },
     { "alpha_siterate",      KW_VALID_SIM, MODE_SIM, NULL, NULL, 0, NULL },
+    { "alpha_locusrate",     KW_VALID_SIM, MODE_SIM, NULL, NULL, 0, NULL },
 
     /* ===== Legacy / removed / renamed ===== */
 
@@ -107,8 +108,6 @@ static const bpp_keyword_t kw_table[] = {
       "Replaced in 3.x; integer values map directly.", 300, NULL },
     { "gammaprior",          KW_RENAMED, MODE_INFER, "phiprior",
       "v4.1.1+; Beta(a,b) prior on phi.", 411, NULL },
-    { "alpha_locusrate",     KW_REMOVED, MODE_SIM, "locusrate",
-      "v4.2.1+ (simulation); rewrite with the multi-argument locusrate syntax.", 421, NULL },
 
     /* Tokens that BPP 4.x still tokenises but immediately aborts. */
     { "sequenceerror",       KW_UNIMPLEMENTED, MODE_INFER, NULL,

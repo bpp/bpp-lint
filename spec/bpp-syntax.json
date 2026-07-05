@@ -28,7 +28,7 @@
     "alpha_locusrate": {
       "name": "alpha_locusrate",
       "context": "simulation",
-      "current": true,
+      "current": false,
       "introduced_in": "4.1.3",
       "present_in": [
         "4.1.3",
@@ -48,7 +48,12 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "status": "removed",
+      "superseded_by": "locusrate",
+      "since": "4.2.1",
+      "aborts": true,
+      "note": "Valid in v4.1.x; since v4.2.1 the --simulate parser aborts telling you to use 'locusrate' (new multi-argument syntax). The keyword is still tokenised in every release, but only to emit that error -- so the auto-derived 'present_in' does NOT mean it is usable."
     },
     "alpha_siterate": {
       "name": "alpha_siterate",
@@ -73,7 +78,14 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "(0 f f +d | 1 f)",
+        "notes": "0=variable: gamma(alpha,beta) prior over ncat categories; 1=fixed: gamma shape alpha"
+      },
+      "default": null,
+      "required": "optional",
+      "summary": "Among-site rate variation to simulate (--simulate)."
     },
     "alphaprior": {
       "name": "alphaprior",
@@ -176,7 +188,15 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "(0|1) f f f f",
+        "notes": "leading switch 0=variable, 1=fixed; then 4 base frequencies T C A G"
+      },
+      "default": null,
+      "required": "conditional",
+      "required_when": "model is GTR",
+      "summary": "GTR base frequencies to simulate under (--simulate only)."
     },
     "bayesfactorbeta": {
       "name": "bayesfactorbeta",
@@ -364,7 +384,13 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "s"
+      },
+      "default": null,
+      "required": "optional",
+      "summary": "Output file for the concatenated alignment (--simulate)."
     },
     "constraintfile": {
       "name": "constraintfile",
@@ -656,7 +682,20 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "+d +d",
+        "params": [
+          "nloci",
+          "nsites"
+        ],
+        "constraints": [
+          "both positive"
+        ]
+      },
+      "default": null,
+      "required": "always",
+      "summary": "Number of loci and sites per locus to simulate (--simulate)."
     },
     "locusrate": {
       "name": "locusrate",
@@ -861,7 +900,13 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "s"
+      },
+      "default": null,
+      "required": "optional",
+      "summary": "Output file for per-locus model parameters (--simulate)."
     },
     "nloci": {
       "name": "nloci",
@@ -1105,7 +1150,15 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "(0|1) f f f f f f",
+        "notes": "leading switch 0=variable (Dirichlet prior), 1=fixed; then 6 exchangeabilities for TC TA TG CA CG AG"
+      },
+      "default": null,
+      "required": "conditional",
+      "required_when": "model is GTR",
+      "summary": "GTR exchangeability rates to simulate under (--simulate only)."
     },
     "sampfreq": {
       "name": "sampfreq",
@@ -1220,7 +1273,14 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "s"
+      },
+      "default": null,
+      "required": "conditional",
+      "required_when": "datefile is set (tip-dated simulation)",
+      "summary": "Sequence sampling-dates file, the --simulate analogue of datefile."
     },
     "seqerr": {
       "name": "seqerr",
@@ -1234,7 +1294,25 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "+d f f f",
+        "params": [
+          "read_depth",
+          "base_err",
+          "a_samples",
+          "a_sites"
+        ],
+        "constraints": [
+          "read_depth 1-300",
+          "0 < base_err < 1",
+          "a_samples >= 0.005",
+          "a_sites >= 0.005"
+        ]
+      },
+      "default": null,
+      "required": "optional",
+      "summary": "Sequencing-error model to simulate: read depth plus base-error and two Dirichlet concentration parameters (--simulate)."
     },
     "seqfile": {
       "name": "seqfile",
@@ -1640,7 +1718,13 @@
         "4.8.4",
         "4.8.6",
         "4.8.7"
-      ]
+      ],
+      "value": {
+        "grammar": "s"
+      },
+      "default": null,
+      "required": "optional",
+      "summary": "Output file for the simulated trees (--simulate)."
     },
     "usedata": {
       "name": "usedata",

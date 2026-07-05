@@ -87,7 +87,6 @@ static const bpp_keyword_t kw_table[] = {
     { "loci&length",         KW_VALID_SIM, MODE_SIM, NULL, NULL, 0, NULL },
     { "modelparafile",       KW_VALID_SIM, MODE_SIM, NULL, NULL, 0, NULL },
     { "alpha_siterate",      KW_VALID_SIM, MODE_SIM, NULL, NULL, 0, NULL },
-    { "alpha_locusrate",     KW_VALID_SIM, MODE_SIM, NULL, NULL, 0, NULL },
 
     /* ===== Legacy / removed / renamed ===== */
 
@@ -108,6 +107,8 @@ static const bpp_keyword_t kw_table[] = {
       "Replaced in 3.x; integer values map directly.", 300, NULL },
     { "gammaprior",          KW_RENAMED, MODE_INFER, "phiprior",
       "v4.1.1+; Beta(a,b) prior on phi.", 411, NULL },
+    { "alpha_locusrate",     KW_REMOVED, MODE_SIM, "locusrate",
+      "v4.2.1+ (simulation); the parser aborts -- rewrite with the multi-argument locusrate syntax.", 421, NULL },
 
     /* Tokens that BPP 4.x still tokenises but immediately aborts. */
     { "sequenceerror",       KW_UNIMPLEMENTED, MODE_INFER, NULL,

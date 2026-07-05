@@ -1,0 +1,31 @@
+{
+  "_comment": "Authored layer, overlaid onto the auto-derived keyword history by generate.py. Put ONLY hand-authored facts here: value grammars (LATEST release only), defaults, required-ness, one-line summaries, and deprecation/rename/reparameterisation notes. Do NOT put source-derivable facts here (keyword set, context, introduced_in, present_in) -- those come from scanning the release tags. Deprecation data should be kept consistent with bpp-lint's src/keywords.c / src/codes.c (ideally seeded from them). Value grammars are being authored keyword-by-keyword against the v4.8.7 source; entries below are the verified starter set.",
+  "keywords": {
+    "scaling": {
+      "value": { "grammar": "b", "values": [0, 1] },
+      "default": 0,
+      "required": "optional",
+      "summary": "Scale conditional (partial) likelihoods to avoid numerical underflow."
+    },
+    "outfile": {
+      "status": "renamed", "superseded_by": "jobname", "since": "4.8.0",
+      "note": "BPP 4.8.0 merged outfile and mcmcfile into jobname (a filename prefix)."
+    },
+    "mcmcfile": {
+      "status": "renamed", "superseded_by": "jobname", "since": "4.8.0",
+      "note": "BPP 4.8.0 merged outfile and mcmcfile into jobname (a filename prefix)."
+    },
+    "diploid": {
+      "status": "renamed", "superseded_by": "phase", "since": "4.2.9",
+      "note": "Renamed to phase; same value format (per-species 0/1 list)."
+    },
+    "migprior": {
+      "status": "renamed", "superseded_by": "wprior", "since": "4.8.0",
+      "note": "MSC-M migration-rate prior renamed to wprior in 4.8.0."
+    },
+    "sequenceerror": {
+      "status": "unimplemented",
+      "note": "Recognised by the parser but aborts at runtime with 'Not implemented'; a dead BPP 3.x keyword. bpp-lint flags this (BPP023)."
+    }
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "v4.1.3": {
+    "tag": "v4.1.3",
+    "version": "4.1.3",
+    "commit": "d2c0883bfcef9837203a937ddc80bd71b8b5daed"
+  },
+  "v4.1.4": {
+    "tag": "v4.1.4",
+    "version": "4.1.4",
+    "commit": "3787236b4cd9de330ce801058a8b4f345cde75da"
+  },
+  "v4.2.9": {
+    "tag": "v4.2.9",
+    "version": "4.2.9",
+    "commit": "9cccf07fa1f07ca2d790c67e9498561cca0a6985"
+  },
+  "v4.3.0": {
+    "tag": "v4.3.0",
+    "version": "4.3.0",
+    "commit": "0dce60a601760beda44d335ae8642f535f921b6f"
+  },
+  "v4.3.8": {
+    "tag": "v4.3.8",
+    "version": "4.3.8",
+    "commit": "04abd33c468172a6515b7e84a4a4d859e53325a3"
+  },
+  "v4.4.0": {
+    "tag": "v4.4.0",
+    "version": "4.4.0",
+    "commit": "c264e1c8e78f477d6f4c3f72e51fe33ec8b21ca3"
+  },
+  "v4.4.1": {
+    "tag": "v4.4.1",
+    "version": "4.4.1",
+    "commit": "25c11266a81dbd50ebaf1f424cb35ecf3869a9c7"
+  },
+  "v4.6.0": {
+    "tag": "v4.6.0",
+    "version": "4.6.0",
+    "commit": "1e99d2cd25661f4ad9ec1da44f5ac55580836037"
+  },
+  "v4.6.1": {
+    "tag": "v4.6.1",
+    "version": "4.6.1",
+    "commit": "633c40f972f10f105279874258df2fb3028da48d"
+  },
+  "v4.6.2": {
+    "tag": "v4.6.2",
+    "version": "4.6.2",
+    "commit": "9389647a120261a585ff18dcf214b8474d047aa8"
+  },
+  "v4.7.0": {
+    "tag": "v4.7.0",
+    "version": "4.7.0",
+    "commit": "92977264cfc02a184f78137d55ccd5448e649321"
+  },
+  "v4.8.0": {
+    "tag": "v4.8.0",
+    "version": "4.8.0",
+    "commit": "93aaa90e9a06d8ed8ccf1c65b493616e4a5b0314"
+  },
+  "4.8.1": {
+    "tag": "4.8.1",
+    "version": "4.8.1",
+    "commit": "577a14cb36e621ca52abe3ee06dc84fe90d0eb7c"
+  },
+  "v4.8.2": {
+    "tag": "v4.8.2",
+    "version": "4.8.2",
+    "commit": "3ad32265720fe08f425f48a44a86be4e592e928a"
+  },
+  "v4.8.4": {
+    "tag": "v4.8.4",
+    "version": "4.8.4",
+    "commit": "8bf67ae487b5d7ca92056a2eb5c70a8f3edec4eb"
+  },
+  "v4.8.6": {
+    "tag": "v4.8.6",
+    "version": "4.8.6",
+    "commit": "5046731180e07dc1cae31044c6642e187e9c6b73"
+  },
+  "v4.8.7": {
+    "tag": "v4.8.7",
+    "version": "4.8.7",
+    "commit": "da8caf3aa00cf275cc9a044e0d806e9bbb0e1460"
+  }
+}

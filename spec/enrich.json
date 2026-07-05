@@ -1,31 +1,58 @@
 {
-  "_comment": "Authored layer, overlaid onto the auto-derived keyword history by generate.py. Put ONLY hand-authored facts here: value grammars (LATEST release only), defaults, required-ness, one-line summaries, and deprecation/rename/reparameterisation notes. Do NOT put source-derivable facts here (keyword set, context, introduced_in, present_in) -- those come from scanning the release tags. Deprecation data should be kept consistent with bpp-lint's src/keywords.c / src/codes.c (ideally seeded from them). Value grammars are being authored keyword-by-keyword against the v4.8.7 source; entries below are the verified starter set.",
+  "_comment": "Authored layer, overlaid onto the auto-derived keyword history by generate.py. Hand-authored facts ONLY: value grammars (LATEST release, v4.8.7), defaults, required-ness, one-line summaries, deprecation/rename notes. Source-derivable facts (keyword set, context, introduced_in, present_in) come from scanning the release tags -- do not repeat them here. Grammars authored against v4.8.7 src/cfile.c parse_* functions + the inline load_cfile dispatch. Symbols (bpp-manual Table 1): b=0/1, d=integer, +d=non-negative integer, f=float, s=string, t=Newick tree, x*=list of >=1 of type x, [x]=optional. Complex keywords (clock/locusrate/heredity/migration/finetune) carry the top-level grammar shape plus a 'detail' note; full nested formalisation is a later refinement.",
   "keywords": {
-    "scaling": {
-      "value": { "grammar": "b", "values": [0, 1] },
-      "default": 0,
-      "required": "optional",
-      "summary": "Scale conditional (partial) likelihoods to avoid numerical underflow."
-    },
-    "outfile": {
-      "status": "renamed", "superseded_by": "jobname", "since": "4.8.0",
-      "note": "BPP 4.8.0 merged outfile and mcmcfile into jobname (a filename prefix)."
-    },
-    "mcmcfile": {
-      "status": "renamed", "superseded_by": "jobname", "since": "4.8.0",
-      "note": "BPP 4.8.0 merged outfile and mcmcfile into jobname (a filename prefix)."
-    },
-    "diploid": {
-      "status": "renamed", "superseded_by": "phase", "since": "4.2.9",
-      "note": "Renamed to phase; same value format (per-species 0/1 list)."
-    },
-    "migprior": {
-      "status": "renamed", "superseded_by": "wprior", "since": "4.8.0",
-      "note": "MSC-M migration-rate prior renamed to wprior in 4.8.0."
-    },
-    "sequenceerror": {
-      "status": "unimplemented",
-      "note": "Recognised by the parser but aborts at runtime with 'Not implemented'; a dead BPP 3.x keyword. bpp-lint flags this (BPP023)."
-    }
+
+    "thetaprior": { "value": { "grammar": "[dist] f f [e]", "dist": ["invgamma", "gamma"], "params": ["alpha", "beta"], "flags": { "e": "invgamma only: integrate theta analytically (v4.8.2+)" }, "constraints": ["invgamma: alpha should be > 2 for finite variance (bpp-lint BPP011)"] }, "default": null, "required": "always", "summary": "Prior on theta (population size); invgamma (default) or gamma. NOTE: v4.8.7 has no 'beta' form despite the manual reference table." },
+    "tauprior":   { "value": { "grammar": "[dist] f f", "dist": ["invgamma", "gamma"], "params": ["alpha", "beta"] }, "default": null, "required": "always", "summary": "Prior on tau (divergence times); invgamma (default) or gamma." },
+    "phiprior":   { "value": { "grammar": "f f", "params": ["a", "b"], "dist": ["beta"] }, "default": null, "required": "conditional", "required_when": "species&tree has an MSC-I introgression node (&phi=)", "summary": "Beta(a,b) prior on phi (introgression probability); no distribution keyword." },
+    "wprior":     { "value": { "grammar": "f f", "params": ["alpha", "beta"], "dist": ["gamma"] }, "default": null, "required": "conditional", "required_when": "migration (MSC-M) is enabled", "summary": "Gamma prior on migration rate w (MSC-M). Replaces migprior (v4.8.0)." },
+    "alphaprior": { "value": { "grammar": "f f [+d]", "params": ["alpha", "beta", "ncat"], "dist": ["gamma"], "defaults": { "ncat": 4 } }, "default": null, "required": "optional", "summary": "Gamma prior for among-site rate variation; optional 3rd value = number of rate categories (default 4)." },
+
+    "seqfile":        { "value": { "grammar": "s" }, "default": null, "required": "always", "summary": "Sequence alignment file (BPP/PHYLIP format)." },
+    "imapfile":       { "value": { "grammar": "s" }, "default": null, "required": "conditional", "required_when": "species count > 1", "summary": "Individual-to-species map file." },
+    "jobname":        { "value": { "grammar": "s" }, "default": null, "required": "always", "summary": "Output filename prefix (no extension). Replaces outfile/mcmcfile (v4.8.0)." },
+    "datefile":       { "value": { "grammar": "s" }, "default": null, "required": "optional", "summary": "Tip-dating file of sequence sampling dates." },
+    "constraintfile": { "value": { "grammar": "s" }, "default": null, "required": "optional", "summary": "File of topological constraints on the species tree." },
+    "traitfile":      { "value": { "grammar": "s" }, "default": null, "required": "optional", "summary": "Morphological/quantitative trait data file (iBPP trait analysis)." },
+
+    "seed":     { "value": { "grammar": "d", "notes": "-1 draws a fresh seed from the system" }, "default": -1, "required": "optional", "summary": "Random-number seed; -1 = draw a random seed." },
+    "nloci":    { "value": { "grammar": "+d", "notes": "0 means use all loci in seqfile" }, "default": null, "required": "always", "summary": "Number of loci to analyse (0 = all)." },
+    "burnin":   { "value": { "grammar": "+d" }, "default": null, "required": "always", "summary": "Number of burn-in MCMC iterations." },
+    "sampfreq": { "value": { "grammar": "+d", "constraints": ["> 0"] }, "default": null, "required": "always", "summary": "MCMC sampling frequency (every Nth iteration)." },
+    "nsample":  { "value": { "grammar": "+d", "constraints": ["> 0"] }, "default": null, "required": "always", "summary": "Number of MCMC samples to collect." },
+    "usedata":  { "value": { "grammar": "d", "values": [0, 1, 2], "notes": "0=prior only, 1=use data, 2=use data with fixed gene trees" }, "default": 1, "required": "optional", "summary": "Whether the sequence likelihood is used." },
+    "cleandata":{ "value": { "grammar": "b" }, "default": 0, "required": "optional", "summary": "Remove sites with ambiguities/gaps before analysis." },
+    "scaling":  { "value": { "grammar": "b", "values": [0, 1] }, "default": 0, "required": "optional", "summary": "Scale conditional likelihoods to avoid numerical underflow." },
+    "threads":  { "value": { "grammar": "+d [+d +d]", "params": ["nthreads", "start", "step"], "constraints": ["each >= 1"] }, "default": null, "required": "optional", "summary": "Number of threads, with optional starting core index and step." },
+    "checkpoint": { "value": { "grammar": "+d [+d]", "params": ["initial", "step"] }, "default": null, "required": "optional", "summary": "Write a checkpoint at iteration `initial`, then every `step` iterations." },
+    "printlocus": { "value": { "grammar": "+d +d*", "notes": "count followed by that many locus indices" }, "default": null, "required": "optional", "summary": "Print per-locus gene trees for the listed loci." },
+    "bayesfactorbeta": { "value": { "grammar": "f", "constraints": ["> 0"] }, "default": 1, "required": "optional", "summary": "Power-posterior beta for marginal-likelihood (Bayes factor) estimation." },
+    "debug_migration": { "value": { "grammar": "+d" }, "default": null, "required": "optional", "hidden": true, "summary": "Developer debug option (undocumented)." },
+
+    "print": { "value": { "grammar": "(-1 | b b b b [b])", "notes": "5 bits: samples, locusrate, heredity/hscalars, genetrees, [qmatrix]; first bit must be 1; -1 = summary only" }, "default": "1 0 0 0 0", "required": "optional", "summary": "Which MCMC quantities to write; first bit (MCMC samples) must be 1." },
+    "phase": { "value": { "grammar": "b*", "notes": "one 0/1 per species (1 = unphased diploid, needs resolving)" }, "default": null, "required": "conditional", "required_when": "diploid/unphased data present", "summary": "Per-species phase-resolution flags. (Renamed from diploid.)" },
+
+    "arch":        { "value": { "grammar": "s", "enum": ["cpu", "sse", "avx", "avx2", "neon"] }, "default": "auto", "required": "optional", "summary": "Force a SIMD instruction set (default: auto-detect)." },
+    "thetamodel":  { "value": { "grammar": "s", "enum": ["linked-none", "linked-all", "linked-inner", "linked-msci", "linked-mscm"] }, "default": "linked-none", "required": "optional", "summary": "How theta parameters are shared across populations." },
+    "loadbalance": { "value": { "grammar": "s", "enum": ["zigzag", "none"] }, "default": "zigzag", "required": "optional", "summary": "Thread work-distribution strategy. NOTE: source default is 'zigzag'; the manual says 'none'." },
+    "model":       { "value": { "grammar": "s [s]", "enum": ["JC69", "K80", "F81", "HKY", "T92", "TN93", "F84", "GTR", "DAYHOFF", "LG", "DCMUT", "JTT", "MTREV", "WAG", "RTREV", "CPREV", "VT", "BLOSUM62", "MTMAM", "MTART", "MTZOA", "PMB", "HIVB", "HIVW", "JTTDCMUT", "FLU", "STMTREV", "Custom"], "notes": "'Custom <filename>' takes an among-locus model file" }, "default": "JC69", "required": "optional", "summary": "Substitution model (DNA or amino-acid), or 'Custom <file>'." },
+
+    "clock":     { "value": { "grammar": "+d [f f f s s]", "detail": "clock id (1=strict/global, 2/3=relaxed); relaxed clocks add rate-prior parameters. See parse_clock." }, "default": "1 (strict)", "required": "optional", "summary": "Molecular-clock model." },
+    "locusrate": { "value": { "grammar": "+d [(f f f s, s)]", "detail": "0=none; 1=estimate with a gamma/dirichlet prior (mubar params + prior keyword); or a filename of fixed per-locus rates. See parse_locusrate." }, "default": 0, "required": "optional", "summary": "Among-locus substitution-rate variation." },
+    "heredity":  { "value": { "grammar": "+d [(f f, s)]", "detail": "0=none; 1=estimate with a gamma prior (alpha beta); or a filename of fixed per-locus heredity multipliers. See parse_heredity." }, "default": 0, "required": "optional", "summary": "Per-locus heredity multipliers (e.g. autosome vs. sex chromosome)." },
+    "finetune":  { "value": { "grammar": "b [f*]", "detail": "leading 0/1 auto-reset flag, then optional step sizes for the MCMC proposals. See parse_finetune." }, "default": "1 (auto)", "required": "optional", "summary": "MCMC proposal step sizes; leading bit enables auto-tuning." },
+    "migration": { "value": { "grammar": "+d ; then N band lines", "detail": "count N, then N lines each naming a source and destination population (MSC-M migration band), optionally with rate parameters. Multi-line; parsed via parse_migration. Requires wprior.", "context_note": "mutually exclusive with introgression (&phi= in species&tree)" }, "default": 0, "required": "optional", "summary": "MSC-M migration bands between populations." },
+    "geneflow":  { "value": { "grammar": "b" }, "default": 0, "required": "optional", "summary": "Enable gene-flow (MSC-M/MSC-I) estimation." },
+
+    "species&tree":        { "value": { "grammar": "+d s* +d* t", "notes": "count K, then K species names, then K per-species sequence counts, then the guide-tree Newick (or a bare label for 1 species)" }, "default": null, "required": "always", "summary": "Species count, names, per-species sample counts, and the guide tree." },
+    "speciesdelimitation": { "value": { "grammar": "b [d f]", "notes": "est (0/1); if 1: rjMCMC method (0 or 1) then its parameter (epsilon for method 0, alpha for method 1)" }, "default": 0, "required": "optional", "summary": "Species-delimitation switch and rjMCMC settings (A10/A11)." },
+    "speciestree":         { "value": { "grammar": "b", "notes": "parse_speciestree may accept optional SPR/SNL proposal parameters" }, "default": 0, "required": "optional", "summary": "Species-tree estimation switch (A01/A11)." },
+    "speciesmodelprior":   { "value": { "grammar": "+d", "range": [0, 3] }, "default": null, "required": "conditional", "required_when": "speciesdelimitation=1 or speciestree=1", "summary": "Prior on species models; integer 0-3." },
+
+    "outfile":  { "status": "renamed", "superseded_by": "jobname", "since": "4.8.0", "aborts": true, "note": "v4.8.7 parser aborts on 'outfile'; use jobname (outfile/mcmcfile merged into jobname in 4.8.0)." },
+    "mcmcfile": { "status": "renamed", "superseded_by": "jobname", "since": "4.8.0", "aborts": true, "note": "v4.8.7 parser aborts on 'mcmcfile'; use jobname." },
+    "diploid":  { "status": "renamed", "superseded_by": "phase", "since": "4.2.9", "aborts": true, "note": "v4.8.7 parser aborts on 'diploid' with a rename message; use phase (same syntax)." },
+    "migprior": { "status": "renamed", "superseded_by": "wprior", "since": "4.8.0", "aborts": true, "note": "v4.8.7 parser aborts on 'migprior'; use wprior." },
+    "sequenceerror": { "status": "unimplemented", "aborts": true, "note": "Recognised by the parser but aborts at runtime ('Not implemented'); a dead BPP 3.x keyword. bpp-lint flags this (BPP023)." }
   }
 }

@@ -259,8 +259,8 @@
       "value": {
         "grammar": "+d"
       },
-      "default": null,
-      "required": "always",
+      "default": 100,
+      "required": "optional",
       "summary": "Number of burn-in MCMC iterations."
     },
     "checkpoint": {
@@ -357,7 +357,7 @@
         "grammar": "+d [f f f s s]",
         "detail": "clock id (1=strict/global, 2/3=relaxed); relaxed clocks add rate-prior parameters. See parse_clock."
       },
-      "default": "1 (strict)",
+      "default": 1,
       "required": "optional",
       "summary": "Molecular-clock model."
     },
@@ -457,7 +457,7 @@
       "value": {
         "grammar": "+d"
       },
-      "default": null,
+      "default": 0,
       "required": "optional",
       "hidden": true,
       "summary": "Developer debug option (undocumented)."
@@ -520,7 +520,7 @@
         "grammar": "b [f*]",
         "detail": "leading 0/1 auto-reset flag, then optional step sizes for the MCMC proposals. See parse_finetune."
       },
-      "default": "1 (auto)",
+      "default": 1,
       "required": "optional",
       "summary": "MCMC proposal step sizes; leading bit enables auto-tuning."
     },
@@ -1030,7 +1030,7 @@
         "grammar": "b*",
         "notes": "one 0/1 per species (1 = unphased diploid, needs resolving)"
       },
-      "default": null,
+      "default": "0",
       "required": "conditional",
       "required_when": "diploid/unphased data present",
       "summary": "Per-species phase-resolution flags. (Renamed from diploid.)"
@@ -1190,8 +1190,8 @@
           "> 0"
         ]
       },
-      "default": null,
-      "required": "always",
+      "default": 10,
+      "required": "optional",
       "summary": "MCMC sampling frequency (every Nth iteration)."
     },
     "scaling": {
@@ -1675,7 +1675,7 @@
           "each >= 1"
         ]
       },
-      "default": null,
+      "default": "1 1 1",
       "required": "optional",
       "summary": "Number of threads, with optional starting core index and step."
     },

@@ -3,9 +3,11 @@
 `bpp-syntax.json` is the **canonical, machine-readable definition of the BPP
 control-file syntax**. It is the single source of truth consumed by:
 
-- **bpp-lint** — its keyword table and value checks, plus its awareness of
-  earlier-release syntax for migrating old control files up to the latest
-  release;
+- **bpp-lint** — its keyword table is *generated* from this spec, not
+  hand-maintained: `gen_keywords_c.py` projects `bpp-syntax.json` into
+  `src/keywords_gen.c` (the `kw_table[]` the linter compiles in), plus its
+  awareness of earlier-release syntax for migrating old control files up to the
+  latest release;
 - **bpp-manual** — the control-file variable tables and per-variable syntax are
   audited (and can be generated) against it;
 - **bpp-agent** — the agent's grounding / tool schema reference it.
@@ -56,8 +58,20 @@ future release fails CI until the spec is regenerated.
 |------|--------|----------|
 | `bpp-syntax.json` | generated | the merged canonical spec (committed artifact) |
 | `releases.json`   | generated | provenance: tag → version → commit SHA |
-| `generate.py`     | authored  | the generator |
+| `generate.py`     | authored  | the spec generator (source tags + enrich.json → bpp-syntax.json) |
+| `gen_keywords_c.py` | authored | projects bpp-syntax.json → `../src/keywords_gen.c` (bpp-lint's keyword table) |
 | `enrich.json`     | authored  | value grammars (latest release), defaults, deprecations |
+
+## bpp-lint's keyword table is generated
+
+`../src/keywords_gen.c` (the `kw_table[]` bpp-lint compiles in) is produced from
+`bpp-syntax.json` by `gen_keywords_c.py` and committed, so the ordinary `make`
+build needs no Python. `../src/keywords.c` keeps only the stable lookup API
+(`bpp_keyword_find` / `_at` / `_suggest`) and references the generated table via
+`extern`. Field mapping: spec `status`/`context` → `kw_status_t`/`kw_mode_t`,
+`superseded_by` → `replacement`, `default` → `default_value`, deprecated
+`note` → the fix hint. Regenerate with `make gen`; `make check-gen` (run by
+`make test`) fails if the committed table drifts from the spec.
 
 ## Keyword record shape
 

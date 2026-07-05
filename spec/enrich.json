@@ -2,7 +2,19 @@
   "_comment": "Authored layer, overlaid onto the auto-derived keyword history by generate.py. Hand-authored facts ONLY: value grammars (LATEST release, v4.8.7), defaults, required-ness, one-line summaries, deprecation/rename notes. Source-derivable facts (keyword set, context, introduced_in, present_in) come from scanning the release tags -- do not repeat them here. Grammars authored against v4.8.7 src/cfile.c parse_* functions + the inline load_cfile dispatch. Symbols (bpp-manual Table 1): b=0/1, d=integer, +d=non-negative integer, f=float, s=string, t=Newick tree, x*=list of >=1 of type x, [x]=optional. Complex keywords (clock/locusrate/heredity/migration/finetune) carry the top-level grammar shape plus a 'detail' note; full nested formalisation is a later refinement.",
   "keywords": {
 
-    "thetaprior": { "value": { "grammar": "[dist] f f [e]", "dist": ["invgamma", "gamma"], "params": ["alpha", "beta"], "flags": { "e": "invgamma only: integrate theta analytically (v4.8.2+)" }, "constraints": ["invgamma: alpha should be > 2 for finite variance (bpp-lint BPP011)"] }, "default": null, "required": "always", "summary": "Prior on theta (population size); invgamma (default) or gamma. NOTE: v4.8.7 has no 'beta' form despite the manual reference table." },
+    "thetaprior": {
+      "value": { "grammar": "[dist] f f [int]", "dist": ["invgamma", "gamma"], "params": ["alpha", "beta"],
+                 "flags": { "int": "invgamma only: integrate theta analytically out of the likelihood (v4.8.2+); 'e'/'E' is accepted as a backward-compat no-op" },
+                 "constraints": ["invgamma: alpha > 2"] },
+      "default": null, "required": "always",
+      "summary": "Prior on theta (population size); invgamma (default) or gamma.",
+      "value_history": [
+        { "value": "beta", "event": "removed", "since": "4.8.0",
+          "note": "A 'beta p q l u' theta prior existed in v4.4.0-v4.7.0 (THETA_PRIOR enum max=3) and was removed in v4.8.0 (enum max=2). No direct replacement; use invgamma or gamma. bpp-lint should flag 'thetaprior = beta ...' in old control files." },
+        { "flag": "e -> int", "event": "reparameterised", "since": "4.8.2",
+          "note": "Before v4.8.2 the inverse-gamma prior integrated theta out by default and a trailing 'e' switched to estimation. Since v4.8.2 estimation is the default and analytical integration is requested with the 'int' keyword; 'e'/'E' is still parsed but is a no-op." }
+      ]
+    },
     "tauprior":   { "value": { "grammar": "[dist] f f", "dist": ["invgamma", "gamma"], "params": ["alpha", "beta"] }, "default": null, "required": "always", "summary": "Prior on tau (divergence times); invgamma (default) or gamma." },
     "phiprior":   { "value": { "grammar": "f f", "params": ["a", "b"], "dist": ["beta"] }, "default": null, "required": "conditional", "required_when": "species&tree has an MSC-I introgression node (&phi=)", "summary": "Beta(a,b) prior on phi (introgression probability); no distribution keyword." },
     "wprior":     { "value": { "grammar": "f f", "params": ["alpha", "beta"], "dist": ["gamma"] }, "default": null, "required": "conditional", "required_when": "migration (MSC-M) is enabled", "summary": "Gamma prior on migration rate w (MSC-M). Replaces migprior (v4.8.0)." },

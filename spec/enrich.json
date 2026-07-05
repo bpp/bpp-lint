@@ -59,12 +59,22 @@
     "species&tree":        { "value": { "grammar": "+d s* +d* t", "notes": "count K, then K species names, then K per-species sequence counts, then the guide-tree Newick (or a bare label for 1 species)" }, "default": null, "required": "always", "summary": "Species count, names, per-species sample counts, and the guide tree." },
     "speciesdelimitation": { "value": { "grammar": "b [d f]", "notes": "est (0/1); if 1: rjMCMC method (0 or 1) then its parameter (epsilon for method 0, alpha for method 1)" }, "default": 0, "required": "optional", "summary": "Species-delimitation switch and rjMCMC settings (A10/A11)." },
     "speciestree":         { "value": { "grammar": "b", "notes": "parse_speciestree may accept optional SPR/SNL proposal parameters" }, "default": 0, "required": "optional", "summary": "Species-tree estimation switch (A01/A11)." },
-    "speciesmodelprior":   { "value": { "grammar": "+d", "range": [0, 3] }, "default": null, "required": "conditional", "required_when": "speciesdelimitation=1 or speciestree=1", "summary": "Prior on species models; integer 0-3." },
+    "speciesmodelprior":   { "value": { "grammar": "+d", "range": [0, 3], "values": { "0": "labeled histories", "1": "rooted trees (uniform)", "2": "uniformSLH", "3": "uniformSRooted" } }, "default": 1, "required": "conditional", "required_when": "recommended explicit when speciesdelimitation=1 or speciestree=1 (bpp-lint BPP101); the source otherwise defaults to 1 (BPP_SPECIES_PRIOR_UNIFORM)", "summary": "Prior on species models; integer 0-3, default 1 (uniform rooted)." },
 
     "outfile":  { "status": "renamed", "superseded_by": "jobname", "since": "4.8.0", "aborts": true, "note": "v4.8.7 parser aborts on 'outfile'; use jobname (outfile/mcmcfile merged into jobname in 4.8.0)." },
     "mcmcfile": { "status": "renamed", "superseded_by": "jobname", "since": "4.8.0", "aborts": true, "note": "v4.8.7 parser aborts on 'mcmcfile'; use jobname." },
     "diploid":  { "status": "renamed", "superseded_by": "phase", "since": "4.2.9", "aborts": true, "note": "v4.8.7 parser aborts on 'diploid' with a rename message; use phase (same syntax)." },
-    "migprior": { "status": "renamed", "superseded_by": "wprior", "since": "4.8.0", "aborts": true, "note": "v4.8.7 parser aborts on 'migprior'; use wprior." },
-    "sequenceerror": { "status": "unimplemented", "aborts": true, "note": "Recognised by the parser but aborts at runtime ('Not implemented'); a dead BPP 3.x keyword. bpp-lint flags this (BPP023)." }
+    "migprior": { "status": "reparameterised", "superseded_by": "wprior", "since": "4.8.0", "aborts": true, "note": "Reparameterised, not a pure rename: wprior uses w = 4M/theta, so numeric values must be re-derived from your theta scale. v4.8.7 parser aborts on 'migprior'." },
+    "sequenceerror": { "status": "unimplemented", "aborts": true, "note": "Recognised by the parser but aborts at runtime ('Not implemented'); a dead BPP 3.x keyword. bpp-lint flags this (BPP023)." },
+
+    "_legacy_comment": "Authored legacy keywords that predate the scanned release tags (< v4.1.3) or were never in mainline BPP (iBPP). They have no auto-derived history; consumers use status/superseded_by. Kept in sync with bpp-lint src/keywords.c.",
+    "uniformrootedtrees": { "context": "inference", "current": false, "status": "renamed", "superseded_by": "speciesmodelprior", "since": "3.x", "note": "BPP 3.x keyword; integer values map directly to speciesmodelprior. Predates the scanned tags." },
+    "gammaprior":         { "context": "inference", "current": false, "status": "renamed", "superseded_by": "phiprior", "since": "4.1.1", "note": "Beta(a,b) prior on phi; renamed to phiprior in v4.1.1 (before the earliest scanned tag v4.1.3)." },
+    "ntraits":      { "context": "inference", "current": false, "status": "foreign", "note": "iBPP-specific (combined trait/sequence analysis); not in mainline BPP." },
+    "nindt":        { "context": "inference", "current": false, "status": "foreign", "note": "iBPP-specific; not in mainline BPP." },
+    "useseqdata":   { "context": "inference", "current": false, "status": "foreign", "note": "iBPP-specific; not in mainline BPP." },
+    "usetraitdata": { "context": "inference", "current": false, "status": "foreign", "note": "iBPP-specific; not in mainline BPP." },
+    "nu0":          { "context": "inference", "current": false, "status": "foreign", "note": "iBPP-specific; not in mainline BPP." },
+    "kappa0":       { "context": "inference", "current": false, "status": "foreign", "note": "iBPP-specific; not in mainline BPP." }
   }
 }

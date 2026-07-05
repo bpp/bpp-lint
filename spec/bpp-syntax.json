@@ -737,11 +737,11 @@
         "4.8.6",
         "4.8.7"
       ],
-      "status": "renamed",
+      "status": "reparameterised",
       "superseded_by": "wprior",
       "since": "4.8.0",
       "aborts": true,
-      "note": "v4.8.7 parser aborts on 'migprior'; use wprior."
+      "note": "Reparameterised, not a pure rename: wprior uses w = 4M/theta, so numeric values must be re-derived from your theta scale. v4.8.7 parser aborts on 'migprior'."
     },
     "migration": {
       "name": "migration",
@@ -1388,12 +1388,18 @@
         "range": [
           0,
           3
-        ]
+        ],
+        "values": {
+          "0": "labeled histories",
+          "1": "rooted trees (uniform)",
+          "2": "uniformSLH",
+          "3": "uniformSRooted"
+        }
       },
-      "default": null,
+      "default": 1,
       "required": "conditional",
-      "required_when": "speciesdelimitation=1 or speciestree=1",
-      "summary": "Prior on species models; integer 0-3."
+      "required_when": "recommended explicit when speciesdelimitation=1 or speciestree=1 (bpp-lint BPP101); the source otherwise defaults to 1 (BPP_SPECIES_PRIOR_UNIFORM)",
+      "summary": "Prior on species models; integer 0-3, default 1 (uniform rooted)."
     },
     "speciestree": {
       "name": "speciestree",
@@ -1700,6 +1706,66 @@
       "required": "conditional",
       "required_when": "migration (MSC-M) is enabled",
       "summary": "Gamma prior on migration rate w (MSC-M). Replaces migprior (v4.8.0)."
+    },
+    "uniformrootedtrees": {
+      "name": "uniformrootedtrees",
+      "context": "inference",
+      "current": false,
+      "status": "renamed",
+      "superseded_by": "speciesmodelprior",
+      "since": "3.x",
+      "note": "BPP 3.x keyword; integer values map directly to speciesmodelprior. Predates the scanned tags."
+    },
+    "gammaprior": {
+      "name": "gammaprior",
+      "context": "inference",
+      "current": false,
+      "status": "renamed",
+      "superseded_by": "phiprior",
+      "since": "4.1.1",
+      "note": "Beta(a,b) prior on phi; renamed to phiprior in v4.1.1 (before the earliest scanned tag v4.1.3)."
+    },
+    "ntraits": {
+      "name": "ntraits",
+      "context": "inference",
+      "current": false,
+      "status": "foreign",
+      "note": "iBPP-specific (combined trait/sequence analysis); not in mainline BPP."
+    },
+    "nindt": {
+      "name": "nindt",
+      "context": "inference",
+      "current": false,
+      "status": "foreign",
+      "note": "iBPP-specific; not in mainline BPP."
+    },
+    "useseqdata": {
+      "name": "useseqdata",
+      "context": "inference",
+      "current": false,
+      "status": "foreign",
+      "note": "iBPP-specific; not in mainline BPP."
+    },
+    "usetraitdata": {
+      "name": "usetraitdata",
+      "context": "inference",
+      "current": false,
+      "status": "foreign",
+      "note": "iBPP-specific; not in mainline BPP."
+    },
+    "nu0": {
+      "name": "nu0",
+      "context": "inference",
+      "current": false,
+      "status": "foreign",
+      "note": "iBPP-specific; not in mainline BPP."
+    },
+    "kappa0": {
+      "name": "kappa0",
+      "context": "inference",
+      "current": false,
+      "status": "foreign",
+      "note": "iBPP-specific; not in mainline BPP."
     }
   }
 }

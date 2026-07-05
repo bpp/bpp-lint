@@ -109,6 +109,8 @@ def main():
     if enrich_path.exists():
         enrich = json.loads(enrich_path.read_text())
         for k, extra in enrich.get("keywords", {}).items():
+            if k.startswith("_"):   # skip comment keys
+                continue
             keywords.setdefault(k, {"name": k}).update(extra)
 
     spec = {

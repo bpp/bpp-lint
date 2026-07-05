@@ -57,6 +57,11 @@ static void print_usage(FILE *out, const char *argv0) {
         "                    Same data-derived estimate, but compared against\n"
         "                    the control file's existing tauprior / thetaprior;\n"
         "                    warns (BPP110/BPP111) when more than ~10x off.\n"
+        "      --json        Emit a machine-readable JSON report (status,\n"
+        "                    diagnostics, counts) to stdout instead of the\n"
+        "                    human-readable diagnostics. Consumers use\n"
+        "                    status == \"valid\" as a stop condition. Cannot be\n"
+        "                    combined with --fix, --diff, or --suggest-priors.\n"
         "      --version     Print version and exit.\n"
         "  -h, --help        Show this help.\n"
         "\n"
@@ -299,6 +304,136 @@ static void check_one_prior(const bpp_file_t *cfile, const char *key,
     out->items[out->n++] = diag;
 }
 
+/* ---------- JSON report (design §2, machine-readable loop signal) ---------- */
+
+/* Print `s` as a JSON string literal (quoted, with the mandatory escapes).
+ * NULL is rendered as an empty string. */
+static void json_print_escaped(FILE *out, const char *s) {
+    fputc('"', out);
+    for (const unsigned char *p = (const unsigned char *) (s ? s : ""); *p; p++) {
+        switch (*p) {
+            case '"':  fputs("\\\"", out); break;
+            case '\\': fputs("\\\\", out); break;
+            case '\n': fputs("\\n", out);  break;
+            case '\r': fputs("\\r", out);  break;
+            case '\t': fputs("\\t", out);  break;
+            default:
+                if (*p < 0x20) fprintf(out, "\\u%04x", (unsigned) *p);
+                else           fputc(*p, out);
+        }
+    }
+    fputc('"', out);
+}
+
+static const char *severity_str(bpp_severity_t s) {
+    switch (s) {
+        case SEV_ERROR:   return "error";
+        case SEV_WARNING: return "warning";
+        default:          return "note";      /* SEV_INFO */
+    }
+}
+
+/* First whitespace-separated token of `v` parsed as an int (0 if unparseable). */
+static int first_int_val(const char *v) {
+    if (!v) return 0;
+    while (*v && isspace((unsigned char) *v)) v++;
+    return atoi(v);
+}
+
+/* Derive the BPP analysis type from the speciesdelimitation/speciestree
+ * switches. Returns "A00"/"A01"/"A10"/"A11", or "unknown" when it cannot be
+ * determined (--simulate, or no species&tree block). Both switches default to
+ * 0 in BPP, so an absent switch is treated as off (matching check_completeness). */
+static const char *analysis_type_str(const bpp_file_t *f, int simulate) {
+    if (simulate || !cfile_find(f, "species&tree")) return "unknown";
+    const bpp_line_t *sd = cfile_find(f, "speciesdelimitation");
+    const bpp_line_t *st = cfile_find(f, "speciestree");
+    int sd_on = sd ? (first_int_val(sd->value) == 1) : 0;
+    int st_on = st ? (first_int_val(st->value) == 1) : 0;
+    if (!sd_on && !st_on) return "A00";
+    if (!sd_on &&  st_on) return "A01";
+    if ( sd_on && !st_on) return "A10";
+    return "A11";
+}
+
+/* Emit the full lint result as JSON matching bpp-agent-design.md §2. Every
+ * value comes from the real diagnostics / parsed control file — nothing is
+ * synthesized. `status` is "valid" iff there are zero error-severity items. */
+static void emit_json(FILE *out, const char *path, const bpp_file_t *f,
+                      const bpp_diag_list_t *diags, int simulate,
+                      int check_priors)
+{
+    size_t n_err = 0, n_warn = 0, n_note = 0;
+    for (size_t i = 0; i < diags->n; i++) {
+        switch (diags->items[i].severity) {
+            case SEV_ERROR:   n_err++;  break;
+            case SEV_WARNING: n_warn++; break;
+            default:          n_note++; break;
+        }
+    }
+
+    const bpp_line_t *st_line = cfile_find(f, "species&tree");
+    const bpp_line_t *nl_line = cfile_find(f, "nloci");
+
+    fputs("{\n", out);
+    fputs("  \"bpp_lint_version\": ", out);
+    json_print_escaped(out, BPP_LINT_VERSION);
+    fputs(",\n  \"status\": ", out);
+    json_print_escaped(out, n_err ? "invalid" : "valid");
+    fputs(",\n  \"file\": ", out);
+    json_print_escaped(out, path);
+    fputs(",\n  \"analysis_type\": ", out);
+    json_print_escaped(out, analysis_type_str(f, simulate));
+
+    /* n_species / n_loci: real if present in the control file, else null. */
+    if (st_line && st_line->value) fprintf(out, ",\n  \"n_species\": %d", first_int_val(st_line->value));
+    else                           fputs(",\n  \"n_species\": null", out);
+    if (nl_line && nl_line->value) fprintf(out, ",\n  \"n_loci\": %d", first_int_val(nl_line->value));
+    else                           fputs(",\n  \"n_loci\": null", out);
+
+    fputs(",\n  \"diagnostics\": [", out);
+    for (size_t i = 0; i < diags->n; i++) {
+        const bpp_diagnostic_t *d = &diags->items[i];
+        fputs(i ? ",\n" : "\n", out);
+        fputs("    {\"code\": ", out);
+        json_print_escaped(out, d->code);
+        fputs(", \"severity\": ", out);
+        json_print_escaped(out, severity_str(d->severity));
+        fprintf(out, ", \"line\": %d, \"column\": %d, \"message\": ", d->lineno, d->column);
+        json_print_escaped(out, d->message);
+        fprintf(out, ", \"fixable\": %s, \"suggested_fix\": ",
+                d->replacement_line ? "true" : "false");
+        if (d->replacement_line) json_print_escaped(out, d->replacement_line);
+        else                     fputs("null", out);
+        fputc('}', out);
+    }
+    fputs(diags->n ? "\n  ]" : "]", out);
+
+    /* prior_check: mirror the diagnostics that --check-priors contributes. */
+    fprintf(out, ",\n  \"prior_check\": {\"requested\": %s, \"issues\": [",
+            check_priors ? "true" : "false");
+    if (check_priors) {
+        int first = 1;
+        for (size_t i = 0; i < diags->n; i++) {
+            const bpp_diagnostic_t *d = &diags->items[i];
+            if (d->code && (strcmp(d->code, "BPP110") == 0 ||
+                            strcmp(d->code, "BPP111") == 0)) {
+                if (!first) fputs(", ", out);
+                first = 0;
+                fputs("{\"code\": ", out);
+                json_print_escaped(out, d->code);
+                fputs(", \"message\": ", out);
+                json_print_escaped(out, d->message);
+                fputc('}', out);
+            }
+        }
+    }
+    fputs("]}", out);
+
+    fprintf(out, ",\n  \"counts\": {\"errors\": %zu, \"warnings\": %zu, \"notes\": %zu}\n}\n",
+            n_err, n_warn, n_note);
+}
+
 int main(int argc, char **argv) {
     int do_fix       = 0;
     int do_diff      = 0;
@@ -308,6 +443,7 @@ int main(int argc, char **argv) {
     int show_codes   = 0;
     int do_suggest_priors = 0;
     int do_check_priors   = 0;
+    int do_json           = 0;
     bpp_color_mode_t color_mode = BPP_COLOR_AUTO;
     const char *path = NULL;
 
@@ -346,6 +482,8 @@ int main(int argc, char **argv) {
             do_suggest_priors = 1;
         } else if (strcmp(a, "--check-priors") == 0) {
             do_check_priors = 1;
+        } else if (strcmp(a, "--json") == 0) {
+            do_json = 1;
         } else if (strcmp(a, "--codes") == 0) {
             show_codes = 1;
         } else if (strncmp(a, "--color=", 8) == 0) {
@@ -381,6 +519,11 @@ int main(int argc, char **argv) {
 
     if (do_fix && do_diff) {
         fprintf(stderr, "%s: --fix and --diff are mutually exclusive\n", argv[0]);
+        return 2;
+    }
+
+    if (do_json && (do_fix || do_diff || do_suggest_priors)) {
+        fprintf(stderr, "%s: --json cannot be combined with --fix, --diff, or --suggest-priors\n", argv[0]);
         return 2;
     }
 
@@ -436,12 +579,17 @@ int main(int argc, char **argv) {
         free(seq_path); free(imap_path);
     }
 
+    int rc = (errors > 0) ? 1 : 0;
+
+    if (do_json) {
+        emit_json(stdout, path, &file, &diags, do_simulate, do_check_priors);
+        goto done;
+    }
+
     bpp_color_set(color_mode);
     bpp_codes_set(show_codes);
     if (quiet) filter_quiet(&diags);
     bpp_diag_print(&diags, path);
-
-    int rc = (errors > 0) ? 1 : 0;
 
     if (do_diff) {
         int hunks = bpp_emit_diff(&file, &diags, path, stdout);

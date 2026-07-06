@@ -325,6 +325,38 @@ static void json_print_escaped(FILE *out, const char *s) {
     fputc('"', out);
 }
 
+/* Escape a substring [s, s+n) as a JSON string (keyword/value spans are short). */
+static void json_print_span(FILE *out, const char *s, size_t n) {
+    char buf[256];
+    if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+    memcpy(buf, s, n);
+    buf[n] = '\0';
+    json_print_escaped(out, buf);
+}
+
+/* For a BPP103 "'X' not set; using default 'Y'" warning, emit a structured
+ * {"keyword","value"} so consumers never parse the human message; null else. */
+static void emit_json_default(FILE *out, const bpp_diagnostic_t *d) {
+    if (d->code && strcmp(d->code, "BPP103") == 0 && d->message) {
+        const char *q1 = strchr(d->message, '\'');
+        const char *q2 = q1 ? strchr(q1 + 1, '\'') : NULL;
+        const char *mk = strstr(d->message, "using default '");
+        if (q1 && q2 && mk) {
+            const char *vs = mk + strlen("using default '");
+            const char *ve = strrchr(vs, '\'');
+            if (ve && ve > vs) {
+                fputs(", \"default\": {\"keyword\": ", out);
+                json_print_span(out, q1 + 1, (size_t)(q2 - (q1 + 1)));
+                fputs(", \"value\": ", out);
+                json_print_span(out, vs, (size_t)(ve - vs));
+                fputc('}', out);
+                return;
+            }
+        }
+    }
+    fputs(", \"default\": null", out);
+}
+
 static const char *severity_str(bpp_severity_t s) {
     switch (s) {
         case SEV_ERROR:   return "error";
@@ -401,10 +433,14 @@ static void emit_json(FILE *out, const char *path, const bpp_file_t *f,
         json_print_escaped(out, severity_str(d->severity));
         fprintf(out, ", \"line\": %d, \"column\": %d, \"message\": ", d->lineno, d->column);
         json_print_escaped(out, d->message);
+        fputs(", \"suggestion\": ", out);
+        if (d->suggestion) json_print_escaped(out, d->suggestion);
+        else               fputs("null", out);
         fprintf(out, ", \"fixable\": %s, \"suggested_fix\": ",
                 d->replacement_line ? "true" : "false");
         if (d->replacement_line) json_print_escaped(out, d->replacement_line);
         else                     fputs("null", out);
+        emit_json_default(out, d);
         fputc('}', out);
     }
     fputs(diags->n ? "\n  ]" : "]", out);

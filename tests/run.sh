@@ -132,6 +132,27 @@ printf 'seqfile = a\nseqfile = b\njobname = r\nnloci = 5\nspecies&tree = 1 A\n' 
 dout="$("$BIN" --json "$dtmp" 2>/dev/null)"
 printf '%s' "$dout" | grep -q '"code": "BPP005"' && ok "BPP005 fires on duplicate seqfile" || bad "BPP005 duplicate key"
 rm -f "$dtmp"
+
+# 9. JSON schema carries suggestion (note) + structured default (for the editor).
+echo "-- json suggestion / structured default --"
+if [[ $HAVE_PY -eq 1 ]]; then
+    stmp="$(mktemp)"
+    printf 'seqfile=a\njobname=r\nnloci=1\nnsample=1\nmodel = HKX\ntauprior=invgamma 3 0.03\nthetaprior=invgamma 3 0.002\nspecies&tree=1 A\n' > "$stmp"
+    sout="$("$BIN" --json "$stmp" 2>/dev/null)"
+    rm -f "$stmp"
+    printf '%s' "$sout" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+diags=d["diagnostics"]
+enum=[x for x in diags if x["code"]=="BPP019"]
+ok_sugg = bool(enum) and enum[0].get("suggestion") and "one of" in enum[0]["suggestion"]
+defs=[x for x in diags if x["code"]=="BPP103" and x.get("default")]
+ok_def = any(x["default"].get("keyword") and x["default"].get("value") is not None for x in defs)
+sys.exit(0 if (ok_sugg and ok_def) else 1)
+' && ok "suggestion + structured default present" || bad "suggestion + structured default present"
+else
+    ok "suggestion/default (skipped: no python3)"
+fi
 # valid file must carry none of the generic value codes
 mout="$("$BIN" --json "$EX/modern-4x.bpp.ctl" 2>/dev/null)"
 if printf '%s' "$mout" | grep -qE '"code": "BPP(005|01[6-9])"'; then

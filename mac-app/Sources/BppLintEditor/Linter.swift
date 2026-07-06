@@ -19,6 +19,15 @@ enum Severity: String {
         case .info:    return .blue
         }
     }
+
+    // bpp-lint's JSON uses "note" for informational items; map to .info.
+    init(json: String) {
+        switch json {
+        case "error":   self = .error
+        case "warning": self = .warning
+        default:        self = .info    // "note" / anything else
+        }
+    }
 }
 
 struct Diagnostic: Identifiable, Hashable {
@@ -31,39 +40,48 @@ struct Diagnostic: Identifiable, Hashable {
     var note: String?
     var fix: String?
 
+    // For a BPP103 "using default" warning: the explicit assignment that would
+    // silence it, as (keyword, value). nil for everything else. This now comes
+    // straight from the linter's structured JSON `default` field -- no parsing
+    // of the human message, and no annotation-stripping heuristics.
+    var defaultAssignment: (keyword: String, value: String)?
+
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (a: Diagnostic, b: Diagnostic) -> Bool { a.id == b.id }
-}
-
-extension Diagnostic {
-    // For a BPP103 "using default" warning, the explicit assignment that would
-    // silence it, as (keyword, literal value). Returns nil for anything that
-    // isn't a fillable default, or whose default has no concrete literal --
-    // e.g. `phase`'s "0 ... 0 (all phased)". The human annotation in
-    // parentheses (" (strict)", " (fixed)") is stripped so the inserted value
-    // is real syntax, not prose.
-    var defaultAssignment: (keyword: String, value: String)? {
-        guard code == "103" else { return nil }
-        let ns = message as NSString
-        let re = try! NSRegularExpression(
-            pattern: "^'([^']+)' not set; using default '(.*)'$")
-        guard let m = re.firstMatch(in: message,
-                                    range: NSRange(location: 0, length: ns.length)),
-              m.numberOfRanges >= 3 else { return nil }
-        let kw = ns.substring(with: m.range(at: 1))
-        var value = ns.substring(with: m.range(at: 2))
-        if let paren = value.range(of: #"\s*\([^)]*\)\s*$"#, options: .regularExpression) {
-            value.removeSubrange(paren)
-        }
-        value = value.trimmingCharacters(in: .whitespaces)
-        guard !value.isEmpty, !value.contains("...") else { return nil }
-        return (kw, value)
-    }
 }
 
 struct LintResult {
     var diagnostics: [Diagnostic]
     var failure: String?   // non-nil only if the linter itself couldn't run
+}
+
+// MARK: - JSON schema (subset of bpp-lint --json we consume)
+
+private struct LintJSON: Decodable {
+    let diagnostics: [Diag]
+
+    struct Diag: Decodable {
+        let code: String?
+        let severity: String
+        let line: Int
+        let column: Int
+        let message: String
+        let suggestion: String?
+        let fixable: Bool
+        let suggestedFix: String?
+        let defaultFill: DefaultFill?
+
+        enum CodingKeys: String, CodingKey {
+            case code, severity, line, column, message, suggestion, fixable
+            case suggestedFix = "suggested_fix"
+            case defaultFill  = "default"
+        }
+    }
+
+    struct DefaultFill: Decodable {
+        let keyword: String
+        let value: String
+    }
 }
 
 @MainActor
@@ -100,7 +118,9 @@ final class LinterRunner: ObservableObject {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = ["--color=never", "--codes", tempFile.path]
+        // Machine-readable report on stdout. Exit 0 = valid, 1 = has errors,
+        // 2 = invocation failure (no JSON emitted).
+        proc.arguments = ["--json", tempFile.path]
         let errPipe = Pipe()
         let outPipe = Pipe()
         proc.standardError = errPipe
@@ -113,17 +133,38 @@ final class LinterRunner: ObservableObject {
             return LintResult(diagnostics: [], failure: "failed to launch bpp-lint: \(error.localizedDescription)")
         }
 
-        // bpp-lint exit 2 = invocation failure; 0/1 = normal lint outcomes
+        let outData = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
+
         if proc.terminationStatus == 2 {
             let err = (try? errPipe.fileHandleForReading.readToEnd())
                 .flatMap { String(data: $0, encoding: .utf8) }
                 ?? "(no stderr)"
-            return LintResult(diagnostics: [], failure: "bpp-lint exit 2: \(err.trimmingCharacters(in: .whitespacesAndNewlines))")
+            return LintResult(diagnostics: [],
+                              failure: "bpp-lint exit 2: \(err.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
 
-        let errData = (try? errPipe.fileHandleForReading.readToEnd()) ?? Data()
-        let errString = String(data: errData, encoding: .utf8) ?? ""
-        return LintResult(diagnostics: parse(errString, tempFilePath: tempFile.path), failure: nil)
+        do {
+            let report = try JSONDecoder().decode(LintJSON.self, from: outData)
+            return LintResult(diagnostics: report.diagnostics.map(Self.convert), failure: nil)
+        } catch {
+            return LintResult(diagnostics: [],
+                              failure: "could not parse bpp-lint JSON: \(error.localizedDescription)")
+        }
+    }
+
+    private nonisolated static func convert(_ d: LintJSON.Diag) -> Diagnostic {
+        // File-level diagnostics report line/column 0; surface them as nil.
+        let line = d.line > 0 ? d.line : nil
+        let col  = d.column > 0 ? d.column : nil
+        let fill = d.defaultFill.map { (keyword: $0.keyword, value: $0.value) }
+        return Diagnostic(lineNumber: line,
+                          column: col,
+                          severity: Severity(json: d.severity),
+                          code: d.code,
+                          message: d.message,
+                          note: d.suggestion,
+                          fix: d.suggestedFix,
+                          defaultAssignment: fill)
     }
 
     // MARK: - Binary discovery
@@ -162,98 +203,5 @@ final class LinterRunner: ObservableObject {
             }
         } catch { }
         return nil
-    }
-
-    // MARK: - Output parsing
-    //
-    // bpp-lint diagnostic format (with --codes):
-    //   <path>:<line>:<col>: <severity> [<code>]: <message>
-    //   <path>: <severity> [<code>]: <message>      (file-level, no line/col)
-    // Continuation lines:
-    //   "  note: <text>"
-    //   "  fix:  <text>"
-
-    nonisolated static func parse(_ text: String, tempFilePath: String) -> [Diagnostic] {
-        var result: [Diagnostic] = []
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var idx = 0
-        while idx < lines.count {
-            if var diag = parseLine(lines[idx], tempFilePath: tempFilePath) {
-                var j = idx + 1
-                while j < lines.count {
-                    let s = lines[j]
-                    if let note = strip(prefix: "  note:", from: s) {
-                        diag.note = note
-                        j += 1
-                    } else if let fix = strip(prefix: "  fix:", from: s) {
-                        diag.fix = fix
-                        j += 1
-                    } else {
-                        break
-                    }
-                }
-                result.append(diag)
-                idx = j
-            } else {
-                idx += 1
-            }
-        }
-        return result
-    }
-
-    private nonisolated static func strip(prefix: String, from s: String) -> String? {
-        guard s.hasPrefix(prefix) else { return nil }
-        return String(s.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
-    }
-
-    private nonisolated static func parseLine(_ line: String, tempFilePath: String) -> Diagnostic? {
-        guard line.hasPrefix(tempFilePath + ":") else { return nil }
-        let body = String(line.dropFirst(tempFilePath.count + 1))
-
-        // File-level diagnostics start with a space (no line/col).
-        if body.hasPrefix(" ") {
-            let (sev, code, msg) = parseSeverityCodeMessage(String(body.dropFirst()))
-            return Diagnostic(lineNumber: nil, column: nil,
-                              severity: sev, code: code, message: msg)
-        }
-
-        // Line-anchored: "LINE:COL: severity[ [code]]: message"
-        let parts = body.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count >= 3,
-              let ln = Int(parts[0]),
-              let col = Int(parts[1]) else { return nil }
-        let tail = String(parts[2]).drop(while: { $0 == " " })
-        let (sev, code, msg) = parseSeverityCodeMessage(String(tail))
-        return Diagnostic(lineNumber: ln, column: col,
-                          severity: sev, code: code, message: msg)
-    }
-
-    private nonisolated static func parseSeverityCodeMessage(_ s: String) -> (Severity, String?, String) {
-        // Split at the first ": " — the boundary between "<severity>[ [code]]"
-        // and "<message>". Note that messages can also contain ": ", so we
-        // split only once.
-        guard let r = s.range(of: ": ") else {
-            return (.info, nil, s)
-        }
-        let header  = String(s[s.startIndex..<r.lowerBound])
-        let message = String(s[r.upperBound...])
-
-        let tokens = header.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-        let sev: Severity
-        switch String(tokens.first ?? "") {
-        case "error":   sev = .error
-        case "warning": sev = .warning
-        case "info":    sev = .info
-        default:        sev = .info
-        }
-
-        var code: String? = nil
-        if tokens.count > 1 {
-            let codeTok = String(tokens[1])
-            if codeTok.hasPrefix("["), codeTok.hasSuffix("]") {
-                code = String(codeTok.dropFirst().dropLast())
-            }
-        }
-        return (sev, code, message)
     }
 }

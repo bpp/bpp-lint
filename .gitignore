@@ -64,6 +64,8 @@ dkms.conf
 Package.resolved
 *.xcodeproj/
 DerivedData/
+# packaged .app / .dmg output (produced by mac-app/package.sh)
+mac-app/dist/
 
 # Emacs byte-compiled artifacts (emacs/)
 *.elc

@@ -10,6 +10,9 @@
 //
 // Or double-click Package.swift to open the project in Xcode.
 //
+// Package an installable app (.app bundle + .dmg) into ./dist:
+//     ./package.sh
+//
 // Requires:
 //   * Swift toolchain (comes with Xcode).
 //   * bpp-lint on $PATH, or BPP_LINT_BINARY env var pointing at it.

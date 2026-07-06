@@ -103,6 +103,35 @@ out="$("$BIN" --json "$EX/does-not-exist.ctl" 2>/dev/null)"; rc=$?
 check "exit code" 2 "$rc"
 [[ -z "$out" ]] && ok "no JSON on stdout" || bad "no JSON on stdout (got output)"
 
+# 8. Grammar-driven value checks: type / arity / range / enum (BPP016-019),
+#    and NO false positives on the valid modern example.
+echo "-- grammar-driven value checks --"
+tmp="$(mktemp)"
+cat > "$tmp" <<'CTL'
+seqfile = x.txt
+jobname = run1
+nloci = 2.5
+cleandata = 3
+usedata = 5
+threads = 1 2 3 4 5
+model = HKX
+species&tree = 1 A
+CTL
+vout="$("$BIN" --json "$tmp" 2>/dev/null)"
+has() { printf '%s' "$vout" | grep -q "\"code\": \"$1\""; }
+has BPP016 && ok "BPP016 wrong type (nloci=2.5)"   || bad "BPP016 wrong type"
+has BPP017 && ok "BPP017 wrong arity (threads)"    || bad "BPP017 wrong arity"
+has BPP018 && ok "BPP018 out of range (usedata=5)" || bad "BPP018 out of range"
+has BPP019 && ok "BPP019 bad enum (model=HKX)"     || bad "BPP019 bad enum"
+rm -f "$tmp"
+# valid file must carry none of the generic value codes
+mout="$("$BIN" --json "$EX/modern-4x.bpp.ctl" 2>/dev/null)"
+if printf '%s' "$mout" | grep -qE '"code": "BPP01[6-9]"'; then
+    bad "no value-check false positives on modern-4x"
+else
+    ok "no value-check false positives on modern-4x"
+fi
+
 echo
 echo "== $pass passed, $fail failed =="
 [[ $fail -eq 0 ]]

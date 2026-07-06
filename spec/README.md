@@ -3,11 +3,14 @@
 `bpp-syntax.json` is the **canonical, machine-readable definition of the BPP
 control-file syntax**. It is the single source of truth consumed by:
 
-- **bpp-lint** — its keyword table is *generated* from this spec, not
-  hand-maintained: `gen_keywords_c.py` projects `bpp-syntax.json` into
-  `src/keywords_gen.c` (the `kw_table[]` the linter compiles in), plus its
-  awareness of earlier-release syntax for migrating old control files up to the
-  latest release;
+- **bpp-lint** — its keyword table *and* its value checking are *generated*
+  from this spec, not hand-maintained: `gen_keywords_c.py` projects
+  `bpp-syntax.json` into `src/keywords_gen.c` — both the `kw_table[]` the linter
+  compiles in and a per-keyword typed **slot list** compiled from each
+  `value.grammar`, which the linter walks to catch wrong type, wrong argument
+  count, out-of-range values, and bad enum choices (diagnostics BPP016–019) —
+  plus its awareness of earlier-release syntax for migrating old control files
+  up to the latest release;
 - **bpp-manual** — the control-file variable tables and per-variable syntax are
   audited (and can be generated) against it;
 - **bpp-agent** — the agent's grounding / tool schema reference it.
@@ -67,11 +70,26 @@ future release fails CI until the spec is regenerated.
 `../src/keywords_gen.c` (the `kw_table[]` bpp-lint compiles in) is produced from
 `bpp-syntax.json` by `gen_keywords_c.py` and committed, so the ordinary `make`
 build needs no Python. `../src/keywords.c` keeps only the stable lookup API
-(`bpp_keyword_find` / `_at` / `_suggest`) and references the generated table via
-`extern`. Field mapping: spec `status`/`context` → `kw_status_t`/`kw_mode_t`,
-`superseded_by` → `replacement`, `default` → `default_value`, deprecated
-`note` → the fix hint. Regenerate with `make gen`; `make check-gen` (run by
-`make test`) fails if the committed table drifts from the spec.
+(`bpp_keyword_find` / `_at` / `_suggest` / `_slots`) and references the generated
+tables via `extern`. Field mapping: spec `status`/`context` →
+`kw_status_t`/`kw_mode_t`, `superseded_by` → `replacement`, `default` →
+`default_value`, deprecated `note` → the fix hint. Regenerate with `make gen`;
+`make check-gen` (run by `make test`) fails if the committed table drifts from
+the spec.
+
+### Value grammars → slot lists
+
+`gen_keywords_c.py` also compiles each keyword's `value.grammar` mini-language
+into a flat list of typed slots (`kw_slot_t`) emitted into `keywords_gen.c`, and
+lint.c's `check_value_generic()` walks a value's tokens against them. The
+grammar atoms map to slot types (`b`→bool, `d`→int, `+d`→uint, `f`→float,
+`s`→string); `[x]` marks trailing optional slots, `x*` a trailing repetition,
+`(0|1)` a bounded leading slot; `enum`/`values`/`range`/`constraints` become
+enum lists and numeric bounds. Grammars that need real parsing (top-level
+alternation with differing arities, Newick trees, multi-line blocks) or that
+have a bespoke check in lint.c (`print`, `thetaprior`, `tauprior`, `phiprior`,
+`finetune`, `locusrate`, `clock`) compile to no slots and are skipped by the
+generic checker. Of the 49 live keywords, 38 currently carry a slot profile.
 
 ## Keyword record shape
 

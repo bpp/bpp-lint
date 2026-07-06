@@ -84,6 +84,34 @@ static const bpp_code_doc_t codes[] = {
       "doubles'. The linter catches the bare-token, wrong-count, and\n"
       "non-positive-number cases up front." },
 
+    { "016",
+      "Value argument has the wrong type.",
+      "A value token does not match the type the keyword's grammar requires:\n"
+      "a boolean field (0/1) given something else, an integer field given a\n"
+      "fraction or a non-number, or a non-negative-integer field given a\n"
+      "negative or fractional value. Checked generically from the control-file\n"
+      "syntax spec (spec/bpp-syntax.json)." },
+
+    { "017",
+      "Value has the wrong number of arguments.",
+      "The keyword's grammar fixes how many values it takes (with a bounded\n"
+      "number of optional trailing ones). Too few or too many were supplied.\n"
+      "Checked generically from the syntax spec; the message states the\n"
+      "expected count." },
+
+    { "018",
+      "Value is out of range.",
+      "A numeric argument violates a bound declared for the keyword (e.g. a\n"
+      "probability outside [0, 1], a count that must be positive, or an enum\n"
+      "code outside its documented range). Checked generically from the syntax\n"
+      "spec." },
+
+    { "019",
+      "Value is not one of the allowed choices.",
+      "A keyword whose value must come from a fixed set (e.g. model, arch,\n"
+      "loadbalance, thetamodel) was given a token outside that set. The\n"
+      "suggestion lists the accepted choices, drawn from the syntax spec." },
+
     /* 02x: legacy / removed / unimplemented keywords */
     { "020",
       "Legacy keyword renamed in a modern BPP release.",

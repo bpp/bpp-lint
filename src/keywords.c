@@ -17,6 +17,7 @@
  * sync with the spec.
  */
 extern const bpp_keyword_t kw_table[];
+extern const kw_valuespec_t kw_value_table[];
 
 const bpp_keyword_t *bpp_keyword_find(const char *name) {
     if (!name) return NULL;
@@ -51,4 +52,12 @@ const bpp_keyword_t *bpp_keyword_suggest(const char *name, kw_mode_t mode, int m
         }
     }
     return (best_d <= max_distance) ? best : NULL;
+}
+
+const kw_slot_t *bpp_keyword_slots(const char *name) {
+    if (!name) return NULL;
+    for (int i = 0; kw_value_table[i].name; i++) {
+        if (bpp_strieq(kw_value_table[i].name, name)) return kw_value_table[i].slots;
+    }
+    return NULL;
 }

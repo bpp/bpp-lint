@@ -124,6 +124,145 @@ def fmt(e):
             f'{cstr(e["default"])} }},')
 
 
+# ---------- value grammar -> slot list (for generic value checking) ----------
+#
+# Compile the spec's value.grammar mini-language into a flat list of typed
+# slots the C validator can walk. Grammars that need real parsing (top-level
+# alternation with differing arities, Newick trees, multi-line blocks) or that
+# have a bespoke check in lint.c compile to None and are skipped.
+
+ATOM_TYPE = {"b": "VT_BOOL", "d": "VT_INT", "+d": "VT_UINT",
+             "f": "VT_FLOAT", "s": "VT_STRING"}
+
+# Keywords with a bespoke check in lint.c (check_*), or a semantically
+# conditional grammar the flat slot checker must not second-guess. These are
+# skipped by the generic checker even when their grammar looks reducible.
+CUSTOM_CHECK = {"print", "thetaprior", "tauprior", "phiprior",
+                "finetune", "locusrate", "clock"}
+
+
+def grammar_tokens(g):
+    toks, i = [], 0
+    while i < len(g):
+        c = g[i]
+        if c.isspace():
+            i += 1
+        elif c in "[]*":
+            toks.append(c)
+            i += 1
+        else:
+            j = i
+            while j < len(g) and not g[j].isspace() and g[j] not in "[]*":
+                j += 1
+            toks.append(g[i:j])
+            i = j
+    return toks
+
+
+def apply_constraints(val, slots):
+    numeric = [s for s in slots if s["type"] in ("VT_INT", "VT_UINT", "VT_FLOAT")]
+
+    def set_min(s, lo, excl=False):
+        s["has_min"] = True
+        s["min"] = float(lo)
+        if excl:
+            s["min_excl"] = True
+
+    def set_range(s, lo, hi):
+        s["has_min"], s["min"] = True, float(lo)
+        s["has_max"], s["max"] = True, float(hi)
+
+    enum = val.get("enum")
+    if enum:
+        for s in slots:
+            if s["type"] == "VT_STRING":
+                s["enums"] = list(enum)
+                break
+
+    values = val.get("values")
+    if isinstance(values, list) and values and all(isinstance(x, int) for x in values) and numeric:
+        set_range(numeric[0], min(values), max(values))
+
+    rng = val.get("range")
+    if isinstance(rng, list) and len(rng) == 2 and numeric:
+        set_range(numeric[0], rng[0], rng[1])
+
+    for c in val.get("constraints") or []:
+        cl = c.lower()
+        spread = any(w in cl for w in ("each", "both", "all"))
+        targets = numeric if spread else numeric[:1]
+        if re.search(r'>\s*0', cl) or "positive" in cl:
+            for s in targets:
+                set_min(s, 0, excl=True) if s["type"] == "VT_FLOAT" else set_min(s, 1)
+        m = re.search(r'>=\s*(\d+(?:\.\d+)?)', cl)
+        if m and (spread or len(numeric) == 1):
+            for s in targets:
+                set_min(s, m.group(1))
+
+
+def compile_grammar(name, rec):
+    if name in CUSTOM_CHECK:
+        return None
+    val = rec.get("value") or {}
+    g = val.get("grammar")
+    if not g:
+        return None
+    g = g.strip()
+    slots = []
+
+    # leading integer-literal choice, e.g. "(0|1) f f f f" -> one bounded slot
+    m = re.match(r'\(\s*(-?\d+)\s*\|\s*(-?\d+)\s*\)\s*(.*)$', g)
+    if m:
+        lo, hi = sorted((int(m.group(1)), int(m.group(2))))
+        slots.append({"type": "VT_UINT" if lo >= 0 else "VT_INT",
+                      "has_min": True, "min": float(lo),
+                      "has_max": True, "max": float(hi)})
+        g = m.group(3).strip()
+
+    # anything left that needs real parsing -> bail out (skip generic check)
+    if re.search(r'[()|,;]', g) or re.search(r'\b(t|dist|int)\b', g):
+        return None
+
+    in_opt = False
+    for t in grammar_tokens(g):
+        if t == "[":
+            in_opt = True
+        elif t == "]":
+            in_opt = False
+        elif t == "*":
+            if slots:
+                slots[-1]["repeat"] = True
+        elif t in ATOM_TYPE:
+            slots.append({"type": ATOM_TYPE[t], "optional": in_opt})
+        else:
+            return None  # unknown atom/literal
+    if not slots:
+        return None
+    apply_constraints(val, slots)
+    return slots
+
+
+def cident(name):
+    return re.sub(r'[^0-9A-Za-z]', "_", name)
+
+
+def slot_c(s, enum_ref):
+    parts = [f".type = {s['type']}"]
+    if s.get("optional"):
+        parts.append(".optional = 1")
+    if s.get("repeat"):
+        parts.append(".repeat = 1")
+    if s.get("has_min"):
+        parts += [".has_min = 1", f".min = {s['min']:g}"]
+    if s.get("min_excl"):
+        parts.append(".min_excl = 1")
+    if s.get("has_max"):
+        parts += [".has_max = 1", f".max = {s['max']:g}"]
+    if s.get("enums"):
+        parts.append(f".enums = {enum_ref}")
+    return "{ " + ", ".join(parts) + " }"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", default=str(HERE / "bpp-syntax.json"))
@@ -173,9 +312,42 @@ def main():
     L.append("};")
     L.append("")
 
+    # ---- value grammar slot tables ----
+    profiles = []  # (name, ident, slots)
+    for name, rec in kws.items():
+        if not rec.get("current"):
+            continue
+        slots = compile_grammar(name, rec)
+        if slots:
+            profiles.append((name, cident(name), slots))
+
+    L.append("/* ===== Value grammars: typed slot lists compiled from")
+    L.append(" * spec value.grammar, walked by lint.c's generic value checker.")
+    L.append(f" * {len(profiles)} of {len(valid_infer) + len(valid_sim)} live keywords have a")
+    L.append(" * reducible grammar; the rest (alternation / Newick / multi-line /")
+    L.append(" * bespoke-checked) are validated elsewhere or not at all. ===== */")
+    L.append("")
+    for name, ident, slots in profiles:
+        enum_ref = "NULL"
+        for s in slots:
+            if s.get("enums"):
+                enum_ref = f"enum_{ident}"
+                items = ", ".join(f'"{e}"' for e in s["enums"])
+                L.append(f"static const char *const {enum_ref}[] = {{ {items}, NULL }};")
+        row = ", ".join(slot_c(s, enum_ref) for s in slots)
+        L.append(f"static const kw_slot_t slots_{ident}[] = {{ {row}, {{ .type = VT_END }} }};")
+    L.append("")
+    L.append("const kw_valuespec_t kw_value_table[] = {")
+    for name, ident, _ in profiles:
+        L.append(f'    {{ {cstr(name)}, slots_{ident} }},')
+    L.append("    { NULL, NULL }")
+    L.append("};")
+    L.append("")
+
     Path(args.out).write_text("\n".join(L))
     print(f"wrote {args.out}: {len(valid_infer)} valid, {len(valid_sim)} sim, "
-          f"{len(deprecated)} deprecated ({len(entries)} total)")
+          f"{len(deprecated)} deprecated ({len(entries)} total); "
+          f"{len(profiles)} value grammars")
 
 
 if __name__ == "__main__":

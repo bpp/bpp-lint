@@ -266,6 +266,24 @@ static void check_thetaprior(bpp_diag_list_t *out, const bpp_line_t *line) {
     const char *dist = value_starts_with_word(line->value, dist_words);
     int nt = count_tokens(line->value);
 
+    /* Arity: after an optional distribution word and an optional trailing
+     * 'int'/'e' flag, thetaprior needs exactly two parameters (a b). */
+    {
+        char *tk[16];
+        int ntk = bpp_tokenise_value(line->value, tk, 16);
+        int lo = dist ? 1 : 0, hi = ntk;
+        if (hi > lo && (bpp_strieq(tk[hi - 1], "int") || bpp_strieq(tk[hi - 1], "e")))
+            hi--;
+        int nparam = hi - lo;
+        if (nparam != 2) {
+            emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP017",
+                 xasprintf("'thetaprior' expects 2 parameters (a b)%s, got %d",
+                           dist ? " after the distribution" : "", nparam < 0 ? 0 : nparam),
+                 xasprintf("e.g. 'thetaprior = invgamma 3 0.002'"), NULL, 0);
+        }
+        bpp_tokens_free(tk, ntk);
+    }
+
     /* Bare-numeric form -> treated as invgamma. Check alpha > 2 since v4.8.2. */
     if (!dist && nt >= 2) {
         char ta[64] = {0};
@@ -393,6 +411,142 @@ static void check_locusrate_legacy(bpp_diag_list_t *out, const bpp_line_t *line)
                  NULL, 0);
         }
     }
+}
+
+/* ---------- generic grammar-driven value check ----------
+ *
+ * Walks a value's tokens against the typed slot list compiled from the spec's
+ * value.grammar (src/keywords_gen.c). Catches wrong type (float where int
+ * expected, non-numeric, etc.), wrong argument count, out-of-range values, and
+ * unrecognised enum choices -- for every keyword with a reducible grammar and
+ * no bespoke check above. */
+
+/* Parse a strict integer token (whole token, no fraction, no trailing junk). */
+static int parse_long_strict(const char *tok, long *out) {
+    if (!tok || !*tok) return 0;
+    char *end = NULL;
+    errno = 0;
+    long v = strtol(tok, &end, 10);
+    if (errno != 0 || end == tok) return 0;
+    while (*end && isspace((unsigned char) *end)) end++;
+    if (*end != '\0') return 0;
+    *out = v;
+    return 1;
+}
+
+static const char *vtype_name(kw_vtype_t t) {
+    switch (t) {
+    case VT_BOOL:   return "0 or 1";
+    case VT_INT:    return "an integer";
+    case VT_UINT:   return "a non-negative integer";
+    case VT_FLOAT:  return "a number";
+    default:        return "a value";
+    }
+}
+
+static void check_slot_token(bpp_diag_list_t *out, const bpp_line_t *L,
+                             const kw_slot_t *s, const char *tok, int pos) {
+    long iv = 0;
+    double dv = 0;
+    int ok = 1;
+    switch (s->type) {
+    case VT_BOOL:
+        if (strcmp(tok, "0") != 0 && strcmp(tok, "1") != 0) ok = 0;
+        break;
+    case VT_INT:
+        if (!parse_long_strict(tok, &iv)) ok = 0; else dv = (double) iv;
+        break;
+    case VT_UINT:
+        if (!parse_long_strict(tok, &iv) || iv < 0) ok = 0; else dv = (double) iv;
+        break;
+    case VT_FLOAT:
+        if (!parse_double(tok, &dv)) ok = 0;
+        break;
+    case VT_STRING:
+    default:
+        break;
+    }
+    if (!ok) {
+        emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP016",
+             xasprintf("'%s' argument %d ('%s') is not %s",
+                       L->key_orig, pos, tok, vtype_name(s->type)),
+             NULL, NULL, 0);
+        return;
+    }
+    if (s->type == VT_STRING && s->enums) {
+        for (int i = 0; s->enums[i]; i++)
+            if (bpp_strieq(tok, s->enums[i])) return;
+        size_t len = 1;
+        for (int i = 0; s->enums[i]; i++) len += strlen(s->enums[i]) + 3;
+        char *list = malloc(len);
+        if (list) {
+            list[0] = '\0';
+            for (int i = 0; s->enums[i]; i++) {
+                if (i) strcat(list, " | ");
+                strcat(list, s->enums[i]);
+            }
+        }
+        emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP019",
+             xasprintf("'%s' value '%s' is not recognised", L->key_orig, tok),
+             list ? xasprintf("expected one of: %s", list) : NULL, NULL, 0);
+        free(list);
+        return;
+    }
+    if (s->type == VT_INT || s->type == VT_UINT || s->type == VT_FLOAT) {
+        if (s->has_min && (s->min_excl ? dv <= s->min : dv < s->min)) {
+            emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP018",
+                 xasprintf("'%s' argument %d (%s) must be %s %g",
+                           L->key_orig, pos, tok, s->min_excl ? ">" : ">=", s->min),
+                 NULL, NULL, 0);
+        } else if (s->has_max && dv > s->max) {
+            emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP018",
+                 xasprintf("'%s' argument %d (%s) must be <= %g",
+                           L->key_orig, pos, tok, s->max),
+                 NULL, NULL, 0);
+        }
+    }
+}
+
+static void check_value_generic(bpp_diag_list_t *out, const bpp_line_t *L) {
+    const kw_slot_t *slots = bpp_keyword_slots(L->key);
+    if (!slots) return;
+    if (!L->value || bpp_is_blank(L->value)) return;  /* empty -> BPP004 */
+
+    char *toks[64];
+    int n = bpp_tokenise_value(L->value, toks, 64);
+    if (n <= 0) return;
+
+    int required = 0, listed = 0, has_repeat = 0;
+    const kw_slot_t *rep = NULL;
+    for (const kw_slot_t *s = slots; s->type != VT_END; s++) {
+        if (s->repeat) { has_repeat = 1; rep = s; }
+        else { listed++; if (!s->optional) required++; }
+    }
+
+    if (n < required) {
+        emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP017",
+             xasprintf("'%s' expects at least %d value%s, got %d",
+                       L->key_orig, required, required == 1 ? "" : "s", n),
+             NULL, NULL, 0);
+    } else if (!has_repeat && n > listed) {
+        emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP017",
+             xasprintf("'%s' expects at most %d value%s, got %d",
+                       L->key_orig, listed, listed == 1 ? "" : "s", n),
+             NULL, NULL, 0);
+    }
+
+    const kw_slot_t *s = slots;
+    for (int i = 0; i < n; i++) {
+        const kw_slot_t *use;
+        if (s->type != VT_END) {
+            use = s;
+            if (!s->repeat) s++;   /* a repeat slot stays put and consumes the rest */
+        } else {
+            use = has_repeat ? rep : NULL;
+        }
+        if (use && use->type != VT_END) check_slot_token(out, L, use, toks[i], i + 1);
+    }
+    bpp_tokens_free(toks, n);
 }
 
 /* ---------- multi-line block detection ---------- */
@@ -1685,6 +1839,10 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
             else if (bpp_strieq(L->key, "phiprior"))   check_phiprior(out, L);
             else if (bpp_strieq(L->key, "finetune"))   check_finetune_positional(out, L);
             else if (bpp_strieq(L->key, "locusrate") && mode == MODE_INFER) check_locusrate_legacy(out, L);
+
+            /* Generic grammar-driven check for every keyword with a reducible
+             * value grammar (no-op for the bespoke-checked ones above). */
+            check_value_generic(out, L);
 
             /* Empty value */
             if (L->value && bpp_is_blank(L->value)

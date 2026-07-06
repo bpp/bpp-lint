@@ -38,6 +38,15 @@ static const bpp_code_doc_t codes[] = {
       "A 'key =' line with no value on the right-hand side. BPP usually treats\n"
       "this as a parse error. Provide a value or delete the line." },
 
+    { "005",
+      "Keyword is assigned more than once.",
+      "The same keyword appears on multiple lines. BPP's control-file parser\n"
+      "just re-stores the option each time, so it silently keeps the LAST\n"
+      "assignment and ignores all earlier ones -- there is no error at run\n"
+      "time. This makes a stray or forgotten duplicate an invisible bug (e.g.\n"
+      "two 'seqfile =' lines run on the second file). Remove the duplicate, or\n"
+      "keep only the line whose value you intend." },
+
     /* 01x: value-format problems */
     { "010",
       "'print' has fewer than 4 bits (legacy single-bit form).",

@@ -619,6 +619,28 @@ static int file_contains(const bpp_file_t *f, const char *needle) {
     return 0;
 }
 
+/* Structural check, keyword-agnostic: a keyword assigned more than once.
+ * BPP's parser silently keeps the LAST assignment (it just re-stores opt_*),
+ * so every earlier one is dead -- a common and otherwise-invisible mistake.
+ * We flag each earlier occurrence, pointing at the later line that wins. */
+static void check_duplicate_keys(const bpp_file_t *f, bpp_diag_list_t *out) {
+    for (size_t i = 0; i < f->n; i++) {
+        const bpp_line_t *a = &f->lines[i];
+        if (!a->key || !bpp_keyword_find(a->key)) continue;  /* known keywords only */
+        for (size_t j = i + 1; j < f->n; j++) {
+            const bpp_line_t *b = &f->lines[j];
+            if (b->key && bpp_strieq(b->key, a->key)) {
+                emit(out, SEV_WARNING, a->lineno, a->key_col, "BPP005",
+                     xasprintf("'%s' is assigned again on line %d; BPP uses the "
+                               "last assignment, so this one is ignored",
+                               a->key_orig, b->lineno),
+                     NULL, NULL, 0);
+                break;  /* one warning per earlier occurrence, at its next dup */
+            }
+        }
+    }
+}
+
 static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
                                bpp_diag_list_t *out, int *errors)
 {
@@ -1858,6 +1880,8 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
 
     /* Completeness pass: flag missing required keywords, illegal-in-context
      * usages, and (optionally) keywords falling back to BPP's default. */
+    check_duplicate_keys(f, out);
+
     check_completeness(f, opts, out, &errors);
 
     /* Cross-keyword consistency: incompatible value combinations between

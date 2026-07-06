@@ -124,12 +124,20 @@ has BPP017 && ok "BPP017 wrong arity (threads)"    || bad "BPP017 wrong arity"
 has BPP018 && ok "BPP018 out of range (usedata=5)" || bad "BPP018 out of range"
 has BPP019 && ok "BPP019 bad enum (model=HKX)"     || bad "BPP019 bad enum"
 rm -f "$tmp"
+
+# duplicate-key structural check (BPP005): keyword assigned twice.
+echo "-- duplicate-key check --"
+dtmp="$(mktemp)"
+printf 'seqfile = a\nseqfile = b\njobname = r\nnloci = 5\nspecies&tree = 1 A\n' > "$dtmp"
+dout="$("$BIN" --json "$dtmp" 2>/dev/null)"
+printf '%s' "$dout" | grep -q '"code": "BPP005"' && ok "BPP005 fires on duplicate seqfile" || bad "BPP005 duplicate key"
+rm -f "$dtmp"
 # valid file must carry none of the generic value codes
 mout="$("$BIN" --json "$EX/modern-4x.bpp.ctl" 2>/dev/null)"
-if printf '%s' "$mout" | grep -qE '"code": "BPP01[6-9]"'; then
-    bad "no value-check false positives on modern-4x"
+if printf '%s' "$mout" | grep -qE '"code": "BPP(005|01[6-9])"'; then
+    bad "no value-check/duplicate false positives on modern-4x"
 else
-    ok "no value-check false positives on modern-4x"
+    ok "no value-check/duplicate false positives on modern-4x"
 fi
 
 echo

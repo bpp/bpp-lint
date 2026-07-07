@@ -1,9 +1,13 @@
 # bpp-lint
 
 A linter for [BPP](https://github.com/bpp/bpp) (Bayesian Phylogenetics
-& Phylogeography) control files. Targets BPP 4.x syntax, flags errors
-and stylistic problems, auto-fixes files written for BPP 2.x / 3.x, and
-sanity-checks priors against the underlying sequence data.
+& Phylogeography) control files. Targets the latest BPP 4.x syntax. It
+validates a control file at three layers — **structural** (missing `=`,
+unknown keyword, duplicate assignment), **value** (each keyword's value checked
+against a generated grammar: type, argument count, range, allowed values), and
+**semantic** (cross-keyword consistency, mirroring BPP's own `check_validity()`)
+— auto-fixes files written for BPP 2.x / 3.x, and sanity-checks priors against
+the underlying sequence data. A `--json` mode makes it scriptable.
 
 ## Install
 
@@ -57,12 +61,28 @@ Codes are grouped:
 
 | Range | Topic                                            |
 |-------|--------------------------------------------------|
-| `0xx` | Lexical / structural problems                    |
-| `01x` | Value-format problems                            |
+| `0xx` | Lexical / structural problems (missing `=`, unknown keyword, duplicate assignment) |
+| `01x` | Value problems: wrong type / argument count / range / allowed value, and format |
 | `02x` | Legacy / renamed / removed keywords (auto-fixable) |
 | `1xx` | Completeness and context                         |
 | `11x` | Prior sanity (`--check-priors`)                  |
 | `12x` | Cross-keyword consistency (mirrors `check_validity()` in `cfile.c`) |
+
+### JSON output
+
+For editors and pipelines, `--json` emits a single machine-readable report to
+stdout instead of the human-readable diagnostics:
+
+```
+bpp-lint --json foo.ctl
+```
+
+It carries top-level `status` (`"valid"` / `"invalid"`), `counts`, and a
+`diagnostics[]` array where each item has `code`, `severity`, `line`, `column`,
+`message`, `suggestion`, `fixable` + `suggested_fix`, and — for `[103]`
+"using default" notices — a structured `default` `{keyword, value}`. Consumers
+typically use `status == "valid"` as a stop condition. `--json` cannot be
+combined with `--fix`, `--diff`, or `--suggest-priors`.
 
 ### Applying fixes
 
@@ -126,6 +146,17 @@ The `examples/` directory contains three fixtures:
 ./bpp-lint --diff  examples/legacy-3x.bpp.ctl
 ./bpp-lint --codes --no-defaults examples/cross-checks.bpp.ctl
 ```
+
+## Keyword and value definitions
+
+The keyword catalogue and every value grammar are **generated** from a canonical
+machine-readable spec, [`spec/bpp-syntax.json`](spec/bpp-syntax.json), which is
+itself derived from the BPP source across its release tags (plus an authored
+layer for value grammars, defaults, and deprecation notes). The linter therefore
+tracks the real parser instead of a hand-maintained copy that can drift.
+`src/keywords_gen.c` — the table compiled into the binary — is regenerated with
+`make gen`, and `make check-gen` (run by `make test`) fails if it drifts from
+the spec. See [`spec/README.md`](spec/README.md) for the full design.
 
 ## Exit codes
 

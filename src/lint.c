@@ -658,7 +658,10 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
     /* --- Must-set keywords (no useful default; BPP aborts if missing) --- */
     static const char *must_set_infer[] = {
         "seqfile", "nloci", "nsample", "jobname",
-        "species&tree", "tauprior", "thetaprior",
+        "species&tree", "thetaprior",
+        /* tauprior is NOT here: with a single species there are no divergence
+         * times, so BPP requires no tau prior. It is required conditionally
+         * (species count > 1) below, alongside imapfile. */
         /* 'model' has a JC69 default (bpp.c sets opt_model = BPP_DNA_MODEL_DEFAULT
          * before load_cfile); BPP103 covers its missing-but-defaulted case. */
         NULL
@@ -690,6 +693,14 @@ static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
                  NULL, NULL, 0);
             (*errors)++;
             FLAG_MISSING("imapfile");
+        }
+
+        if (species_count > 1 && !is_effectively_set(f, "tauprior")) {
+            emit(out, SEV_ERROR, 0, 0, "BPP101",
+                 xasprintf("'tauprior' is required (species count = %d)", species_count),
+                 NULL, NULL, 0);
+            (*errors)++;
+            FLAG_MISSING("tauprior");
         }
 
         int sd_on = 0, str_on = 0;

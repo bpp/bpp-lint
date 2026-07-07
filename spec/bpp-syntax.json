@@ -1430,8 +1430,8 @@
         "4.8.7"
       ],
       "value": {
-        "grammar": "b [d f]",
-        "notes": "est (0/1); if 1: rjMCMC method (0 or 1) then its parameter (epsilon for method 0, alpha for method 1)"
+        "grammar": "b [d f f]",
+        "notes": "est (0/1); if 1: rjMCMC algorithm (0 or 1) then its finetune params -- algorithm 0 takes one (epsilon): '1 0 e'; algorithm 1 takes two (alpha m): '1 1 a m'"
       },
       "default": 0,
       "required": "optional",
@@ -1504,12 +1504,12 @@
         "4.8.7"
       ],
       "value": {
-        "grammar": "b",
-        "notes": "parse_speciestree may accept optional SPR/SNL proposal parameters"
+        "grammar": "b f*",
+        "notes": "estimate switch (0/1); if 1, may be followed by up to 4 SPR/SNL proposal tuning floats (e.g. 'pSlider ExpandRatio ShrinkRatio'), which parse_speciestree reads best-effort"
       },
       "default": 0,
       "required": "optional",
-      "summary": "Species-tree estimation switch (A01/A11)."
+      "summary": "Species-tree estimation switch + optional move tuning (A01/A11)."
     },
     "tauprior": {
       "name": "tauprior",
@@ -1547,7 +1547,8 @@
         ]
       },
       "default": null,
-      "required": "always",
+      "required": "conditional",
+      "required_when": "species count > 1 (single-species analyses have no divergence times)",
       "summary": "Prior on tau (divergence times); invgamma (default) or gamma."
     },
     "thetamodel": {

@@ -50,7 +50,7 @@ const bpp_keyword_t kw_table[] = {
     {         "species&tree", KW_VALID          , MODE_BOTH , NULL, "Species count, names, per-species sample counts, and the guide tree.", 0, NULL },
     {  "speciesdelimitation", KW_VALID          , MODE_INFER, NULL, "Species-delimitation switch and rjMCMC settings (A10/A11).", 0, "0" },
     {    "speciesmodelprior", KW_VALID          , MODE_INFER, NULL, "Prior on species models; integer 0-3, default 1 (uniform rooted).", 0, "1" },
-    {          "speciestree", KW_VALID          , MODE_INFER, NULL, "Species-tree estimation switch (A01/A11).", 0, "0" },
+    {          "speciestree", KW_VALID          , MODE_INFER, NULL, "Species-tree estimation switch + optional move tuning (A01/A11).", 0, "0" },
     {             "tauprior", KW_VALID          , MODE_INFER, NULL, "Prior on tau (divergence times); invgamma (default) or gamma.", 0, NULL },
     {           "thetamodel", KW_VALID          , MODE_INFER, NULL, "How theta parameters are shared across populations.", 0, "linked-none" },
     {           "thetaprior", KW_VALID          , MODE_INFER, NULL, "Prior on theta (population size); invgamma (default) or gamma.", 482, NULL },
@@ -128,9 +128,9 @@ static const kw_slot_t slots_seed[] = { { .type = VT_INT }, { .type = VT_END } }
 static const kw_slot_t slots_seqDates[] = { { .type = VT_STRING }, { .type = VT_END } };
 static const kw_slot_t slots_seqerr[] = { { .type = VT_UINT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
 static const kw_slot_t slots_seqfile[] = { { .type = VT_STRING }, { .type = VT_END } };
-static const kw_slot_t slots_speciesdelimitation[] = { { .type = VT_BOOL }, { .type = VT_INT, .optional = 1 }, { .type = VT_FLOAT, .optional = 1 }, { .type = VT_END } };
+static const kw_slot_t slots_speciesdelimitation[] = { { .type = VT_BOOL }, { .type = VT_INT, .optional = 1 }, { .type = VT_FLOAT, .optional = 1 }, { .type = VT_FLOAT, .optional = 1 }, { .type = VT_END } };
 static const kw_slot_t slots_speciesmodelprior[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .has_max = 1, .max = 3 }, { .type = VT_END } };
-static const kw_slot_t slots_speciestree[] = { { .type = VT_BOOL }, { .type = VT_END } };
+static const kw_slot_t slots_speciestree[] = { { .type = VT_BOOL }, { .type = VT_FLOAT, .repeat = 1 }, { .type = VT_END } };
 static const char *const enum_thetamodel[] = { "linked-none", "linked-all", "linked-inner", "linked-msci", "linked-mscm", NULL };
 static const kw_slot_t slots_thetamodel[] = { { .type = VT_STRING, .enums = enum_thetamodel }, { .type = VT_END } };
 static const kw_slot_t slots_threads[] = { { .type = VT_UINT, .has_min = 1, .min = 1 }, { .type = VT_UINT, .optional = 1, .has_min = 1, .min = 1 }, { .type = VT_UINT, .optional = 1, .has_min = 1, .min = 1 }, { .type = VT_END } };

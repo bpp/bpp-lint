@@ -161,6 +161,24 @@ else
     ok "no value-check/duplicate false positives on modern-4x"
 fi
 
+# Regression: real control-file forms from the official BPP examples that BPP
+# 4.8.7 accepts but bpp-lint used to falsely reject (differential-corpus finds).
+echo "-- differential-corpus regressions --"
+rtmp="$(mktemp)"
+# speciestree with SPR/SNL move-tuning floats (frogs A01/A11)
+printf 'seqfile=x\nImapfile=m\njobname=r\nnloci=1\nnsample=1\nthetaprior=invgamma 3 0.01\ntauprior=invgamma 3 0.02\nspeciesmodelprior=1\nspecies&tree=2 A B\n((A,B));\nspeciestree=1 0.4 0.2 0.1\n' > "$rtmp"
+"$BIN" "$rtmp" 2>&1 | grep -qi 'speciestree.*expect' && bad "speciestree tuning floats accepted" || ok "speciestree tuning floats accepted"
+# speciesdelimitation rjMCMC algorithm-1 form '1 1 a m' (frogs A10/A11)
+printf 'seqfile=x\nImapfile=m\njobname=r\nnloci=1\nnsample=1\nthetaprior=invgamma 3 0.01\ntauprior=invgamma 3 0.02\nspeciesmodelprior=1\nspecies&tree=2 A B\n((A,B));\nspeciesdelimitation=1 1 2 1\n' > "$rtmp"
+"$BIN" "$rtmp" 2>&1 | grep -qi 'speciesdelimitation.*expect' && bad "speciesdelimitation '1 1 a m' accepted" || ok "speciesdelimitation '1 1 a m' accepted"
+# single-species analysis (yu2001): no tauprior needed
+printf 'seqfile=x\njobname=r\nnloci=1\nnsample=1\nthetaprior=invgamma 3 0.01\nspecies&tree=1 A\n' > "$rtmp"
+"$BIN" "$rtmp" 2>&1 | grep -qi "'tauprior' is required" && bad "single-species needs no tauprior" || ok "single-species needs no tauprior"
+# but multi-species without tauprior MUST still be flagged (no over-fix)
+printf 'seqfile=x\nImapfile=m\njobname=r\nnloci=1\nnsample=1\nthetaprior=invgamma 3 0.01\nspecies&tree=2 A B\n((A,B));\n' > "$rtmp"
+"$BIN" "$rtmp" 2>&1 | grep -qi "'tauprior' is required" && ok "multi-species still requires tauprior" || bad "multi-species still requires tauprior"
+rm -f "$rtmp"
+
 echo
 echo "== $pass passed, $fail failed =="
 [[ $fail -eq 0 ]]

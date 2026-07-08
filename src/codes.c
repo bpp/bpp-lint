@@ -151,6 +151,15 @@ static const bpp_code_doc_t codes[] = {
       "'sequenceerror' (the BPP 3.x genotyping-error model has not been\n"
       "ported to 4.x)." },
 
+    { "024",
+      "'tauprior' invgamma alpha <= 1 (BPP v4.8.2+ requires alpha > 1).",
+      "Since BPP v4.8.2, an inverse-gamma prior on tau (divergence times)\n"
+      "requires the shape parameter alpha > 1; BPP hard-aborts otherwise\n"
+      "('Alpha value of Inv-Gamma(a,b) of tauprior must be > 1'). The\n"
+      "bare-numeric form ('tauprior = a b') is implicitly invgamma. Pick\n"
+      "alpha > 1, or switch to an explicit gamma prior, which has no such\n"
+      "bound. (Compare BPP011, the analogous alpha > 2 rule for thetaprior.)" },
+
     /* 1xx: completeness / semantics */
     { "100",
       "Required keyword is not set.",

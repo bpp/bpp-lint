@@ -290,7 +290,9 @@ static void check_thetaprior(bpp_diag_list_t *out, const bpp_line_t *line) {
         sscanf(line->value, "%63s", ta);
         double alpha;
         if (parse_double(ta, &alpha) && alpha <= 2.0) {
-            emit(out, SEV_WARNING, line->lineno, line->val_col, "BPP011",
+            /* BPP 4.8.2+ hard-aborts here ("Alpha value of Inv-Gamma(a,b) of
+             * thetaprior must be > 2"), so this is an error, not a warning. */
+            emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP011",
                  xasprintf("'thetaprior' alpha=%g with implicit invgamma; v4.8.2+ requires alpha > 2", alpha),
                  xasprintf("use 'thetaprior = gamma %s ...' or pick alpha > 2", ta),
                  NULL, 0);
@@ -301,7 +303,7 @@ static void check_thetaprior(bpp_diag_list_t *out, const bpp_line_t *line) {
         sscanf(line->value, "%*s %63s %63s", ta, tb);
         double alpha;
         if (parse_double(ta, &alpha) && alpha <= 2.0) {
-            emit(out, SEV_WARNING, line->lineno, line->val_col, "BPP011",
+            emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP011",
                  xasprintf("'thetaprior = invgamma %s ...': v4.8.2+ requires alpha > 2", ta),
                  NULL, NULL, 0);
         }
@@ -327,6 +329,24 @@ static void check_tauprior(bpp_diag_list_t *out, const bpp_line_t *line) {
              xasprintf("'tauprior' has three tokens; the third is ignored in 4.x"),
              NULL,
              fix, line->lineno);
+    }
+
+    /* Since BPP v4.8.2, an invgamma prior on tau requires alpha > 1; BPP
+     * hard-aborts otherwise ("Alpha value of Inv-Gamma(a,b) of tauprior must
+     * be > 1"). The bare-numeric form is implicitly invgamma. (gamma has no
+     * such bound, so only invgamma is checked.) Confirmed against bpp 4.8.7. */
+    if (!dist || bpp_strieq(dist, "invgamma")) {
+        char ta[64] = {0};
+        if (dist) sscanf(line->value, "%*s %63s", ta);
+        else      sscanf(line->value, "%63s", ta);
+        double alpha;
+        if (parse_double(ta, &alpha) && alpha <= 1.0) {
+            emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP024",
+                 xasprintf("'tauprior'%s alpha=%g; v4.8.2+ requires invgamma alpha > 1",
+                           dist ? " invgamma" : " (implicit invgamma)", alpha),
+                 xasprintf("pick alpha > 1, or use an explicit 'tauprior = gamma a b'"),
+                 NULL, 0);
+        }
     }
 }
 
@@ -362,36 +382,35 @@ static void check_phiprior(bpp_diag_list_t *out, const bpp_line_t *line) {
 
 static void check_finetune_positional(bpp_diag_list_t *out, const bpp_line_t *line) {
     if (!line->value) return;
-    /* New (>=v4.8.1) syntax has the colon embedded inside subsequent tokens
-     * (e.g. "Gage:5"). Old positional form has a colon attached to the first
-     * token ("1:") OR no colons at all. */
-    int has_kv = 0;
-    int has_postnum_colon = 0;
+    /* Modern (>=v4.8.1) syntax: an optional leading 0|1 auto-tune flag, then
+     * whitespace-separated 'label:value' pairs (e.g. "Gage:5 tau:0.001"). The
+     * pre-v4.8.1 positional form -- either "1: 5 0.001 ..." (colon on the flag)
+     * or a bare "1 5 0.001 ..." (flag followed by plain numbers) -- is REJECTED
+     * by BPP 4.8.1+: the parser aborts on startup ("the syntax for the
+     * 'finetune' tag has changed since BPP v4.8.1"). So it is an error, not a
+     * warning -- a file with it will not run. Confirmed against bpp 4.8.7. */
+    int idx = 0, legacy = 0;
     const char *p = line->value;
-    int idx = 0;
     while (*p) {
         while (*p && isspace((unsigned char) *p)) p++;
         if (!*p || *p == '*' || *p == '#') break;
         const char *tok = p;
         while (*p && !isspace((unsigned char) *p) && *p != '*' && *p != '#') p++;
-        /* did this token contain a colon, not in position 1 of the line? */
-        for (const char *q = tok; q < p; q++) {
-            if (*q == ':') {
-                if (idx == 0) {
-                    /* "1:" — old positional indicator */
-                    has_postnum_colon = 1;
-                } else {
-                    has_kv = 1;
-                }
-                break;
-            }
-        }
+        int has_colon = 0;
+        for (const char *q = tok; q < p; q++)
+            if (*q == ':') { has_colon = 1; break; }
+        /* idx 0 is the auto flag: a bare 0|1 is fine, a trailing ':' ("1:") is
+         * the legacy marker. Every later token must be a 'label:value' pair; a
+         * bare (colon-less) token there is a legacy positional value. */
+        if (idx == 0) { if (has_colon)  legacy = 1; }
+        else          { if (!has_colon) legacy = 1; }
         idx++;
     }
-    if (has_postnum_colon && !has_kv) {
-        emit(out, SEV_WARNING, line->lineno, line->val_col, "BPP013",
-             xasprintf("'finetune' uses pre-v4.8.1 positional form; expects 'key:value' pairs"),
-             xasprintf("e.g. 'finetune = 1 Gage:5 Gspr:0.001 tau:0.001 mix:0.3 lrht:0.33'"),
+    if (legacy) {
+        emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP013",
+             xasprintf("'finetune' uses the pre-v4.8.1 positional form; BPP 4.8.1+ aborts on it"),
+             xasprintf("use 'finetune = 1' (auto-tune) or "
+                       "'finetune = 1 Gage:5 Gspr:0.001 tau:0.001 mix:0.3 lrht:0.33'"),
              NULL, 0);
     }
 }

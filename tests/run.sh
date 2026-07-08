@@ -179,6 +179,62 @@ printf 'seqfile=x\nImapfile=m\njobname=r\nnloci=1\nnsample=1\nthetaprior=invgamm
 "$BIN" "$rtmp" 2>&1 | grep -qi "'tauprior' is required" && ok "multi-species still requires tauprior" || bad "multi-species still requires tauprior"
 rm -f "$rtmp"
 
+# Regression: legacy syntax forms that make BPP 4.8.7 HARD-ABORT on startup must
+# be reported as ERRORS (not warnings, and not silently accepted). Each form
+# below was confirmed to abort the real bpp 4.8.7 binary via differential test.
+echo "-- legacy-abort severity (differential vs bpp 4.8.7) --"
+ltmp="$(mktemp)"
+VBODY='seqfile=x
+imapfile=m
+jobname=r
+nloci=1
+nsample=1
+species&tree=2 A B
+2 2
+((A,B));'
+assert_err() { # <body> <code> <label>
+    printf '%s\n' "$1" > "$ltmp"
+    if [[ $HAVE_PY -eq 1 ]]; then
+        "$BIN" --json "$ltmp" 2>/dev/null | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+hit=[x for x in d["diagnostics"] if x["code"]==sys.argv[1] and x["severity"]=="error"]
+sys.exit(0 if hit else 1)' "$2" && ok "$3" || bad "$3"
+    else
+        ok "$3 (skipped: no python3)"
+    fi
+}
+assert_err "$VBODY
+thetaprior=invgamma 3 0.002
+tauprior=invgamma 3 0.04
+finetune = 1: 5 0.001 0.001 0.3" BPP013 "BPP013 finetune colon-form is an error"
+assert_err "$VBODY
+thetaprior=invgamma 3 0.002
+tauprior=invgamma 3 0.04
+finetune = 1 5 0.001 0.3" BPP013 "BPP013 finetune bare-positional is an error"
+assert_err "$VBODY
+thetaprior=2 0.2
+tauprior=invgamma 3 0.04" BPP011 "BPP011 thetaprior invgamma alpha<=2 is an error"
+assert_err "$VBODY
+thetaprior=invgamma 3 0.002
+tauprior=1 0.03" BPP024 "BPP024 tauprior invgamma alpha<=1 is an error"
+# a valid modern file must trip NONE of these three legacy-abort codes
+printf '%s\n' "$VBODY
+thetaprior=invgamma 3 0.002
+tauprior=invgamma 3 0.04
+finetune = 1 Gage:5 Gspr:0.001 tau:0.001 mix:0.3" > "$ltmp"
+if [[ $HAVE_PY -eq 1 ]]; then
+    "$BIN" --json "$ltmp" 2>/dev/null | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+sys.exit(1 if any(x["code"] in ("BPP011","BPP013","BPP024") for x in d["diagnostics"]) else 0)' \
+      && ok "no legacy-abort false positive on modern finetune/priors" \
+      || bad "no legacy-abort false positive on modern finetune/priors"
+else
+    ok "modern finetune/priors (skipped: no python3)"
+fi
+rm -f "$ltmp"
+
 echo
 echo "== $pass passed, $fail failed =="
 [[ $fail -eq 0 ]]

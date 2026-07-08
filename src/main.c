@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BPP_LINT_VERSION "0.3.1"
+#define BPP_LINT_VERSION "0.3.2"
 
 static void print_usage(FILE *out, const char *argv0) {
     fprintf(out,

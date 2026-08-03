@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BPP_LINT_VERSION "0.3.3"
+#define BPP_LINT_VERSION "0.3.4"
 
 static void print_usage(FILE *out, const char *argv0) {
     fprintf(out,
@@ -71,6 +71,10 @@ static void print_usage(FILE *out, const char *argv0) {
         "                    so a follow-up lint reports them. Use --out PATH to\n"
         "                    write to a file (default stdout).\n"
         "      --out PATH    Destination for --template (default: stdout).\n"
+        "      --species-tree-file PATH\n"
+        "                    Read the species&tree block for --template from PATH\n"
+        "                    (e.g. bpp-tree's .stree output) instead of an inline\n"
+        "                    --species-tree string.\n"
         "      --version     Print version and exit.\n"
         "  -h, --help        Show this help.\n"
         "\n"
@@ -670,6 +674,31 @@ int main(int argc, char **argv) {
                 return 2;
             }
             out_path = argv[++i];
+        } else if (strcmp(a, "--species-tree-file") == 0) {
+            // Read the species&tree block from a file (e.g. bpp-tree's .stree
+            // output) instead of an inline string, so callers never pass the
+            // multi-line block on the command line.
+            if (i + 1 >= argc) {
+                fprintf(stderr, "%s: --species-tree-file requires a path\n", argv[0]);
+                return 2;
+            }
+            const char *stpath = argv[++i];
+            FILE *sf = fopen(stpath, "r");
+            if (!sf) {
+                fprintf(stderr, "%s: cannot read '%s': %s\n", argv[0], stpath, strerror(errno));
+                return 2;
+            }
+            static char stbuf[8192];
+            size_t nr = fread(stbuf, 1, sizeof stbuf - 1, sf);
+            fclose(sf);
+            stbuf[nr] = '\0';
+            while (nr > 0 && (stbuf[nr - 1] == '\n' || stbuf[nr - 1] == '\r')) stbuf[--nr] = '\0';
+            if (n_tpl >= (int)(sizeof tpl_keys / sizeof tpl_keys[0])) {
+                fprintf(stderr, "%s: too many --<field> overrides\n", argv[0]); return 2;
+            }
+            tpl_keys[n_tpl] = "species&tree";
+            tpl_vals[n_tpl] = stbuf;
+            n_tpl++;
         } else if (template_field_for_flag(a) != NULL) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "%s: %s requires a value\n", argv[0], a);

@@ -278,6 +278,20 @@ else
 fi
 rm -f "$ttmp"
 
+# --species-tree-file: block read from a file (bpp-tree's .stree) reaches valid
+stf="$(mktemp)"; ttmp2="$(mktemp)"
+printf 'species&tree = 2  A B\n   2 2\n   (A,B);\n' > "$stf"
+"$BIN" --template A00 --seqfile s.txt --imapfile m.txt --species-tree-file "$stf" \
+    --nloci 5 --thetaprior 'invgamma 3 0.002' --tauprior 'invgamma 3 0.04' \
+    --out "$ttmp2" >/dev/null 2>&1
+if [[ $HAVE_PY -eq 1 ]]; then
+    check "--species-tree-file yields a valid control file" "valid" "$(jget "$("$BIN" --json "$ttmp2" 2>/dev/null)" status)"
+    check "block from file, prefix not doubled" "0" "$(grep -c 'species&tree = species&tree' "$ttmp2" | tr -d ' ')"
+else
+    ok "--species-tree-file (skipped: no python3)"
+fi
+rm -f "$stf" "$ttmp2"
+
 echo
 echo "== $pass passed, $fail failed =="
 [[ $fail -eq 0 ]]

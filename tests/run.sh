@@ -235,6 +235,49 @@ else
 fi
 rm -f "$ltmp"
 
+# --- --template control-file scaffolding (0.3.3) ---------------------------
+echo "-- --template scaffolding --"
+ttmp="$(mktemp)"
+
+# bare template carries the analysis-type switches and marks required fields
+tpl="$("$BIN" --template A00 2>/dev/null)"
+printf '%s' "$tpl" | grep -q "speciesdelimitation = 0" && ok "template A00 sets speciesdelimitation=0" || bad "template A00 speciesdelimitation"
+printf '%s' "$tpl" | grep -q "speciestree = 0" && ok "template A00 sets speciestree=0" || bad "template A00 speciestree"
+printf '%s' "$tpl" | grep -qE "REQUIRED.*seqfile|seqfile.*REQUIRED" && ok "template marks seqfile REQUIRED" || bad "template seqfile REQUIRED"
+
+# A10 flips speciesdelimitation on
+"$BIN" --template A10 2>/dev/null | grep -q "speciesdelimitation = 1" && ok "template A10 sets speciesdelimitation=1" || bad "template A10 speciesdelimitation"
+
+# bad type is rejected
+"$BIN" --template ZZZ >/dev/null 2>&1 && bad "template rejects bad type" || ok "template rejects bad type"
+
+# drip loop: with seqfile+imapfile the still-missing required fields are flagged
+"$BIN" --template A00 --seqfile s.txt --imapfile m.txt --out "$ttmp" >/dev/null 2>&1
+if [[ $HAVE_PY -eq 1 ]]; then
+    j="$("$BIN" --json "$ttmp" 2>/dev/null)"
+    st="$(jget "$j" status)"
+    check "template+seqfile still invalid (drip)" "invalid" "$st"
+    printf '%s' "$j" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(x["code"]=="BPP100" for x in d["diagnostics"]) else 1)' \
+        && ok "drip reports BPP100 for remaining required fields" \
+        || bad "drip reports BPP100 for remaining required fields"
+else
+    ok "drip loop (skipped: no python3)"
+fi
+
+# full fill -> valid (species-tree WITH the "species&tree = " label, as bpp-tree
+# emits it -- the prefix must not be doubled)
+"$BIN" --template A00 --seqfile s.txt --imapfile m.txt \
+    --species-tree "$(printf 'species&tree = 2  A B\n                       2 2\n                       (A,B);')" \
+    --nloci 5 --thetaprior 'invgamma 3 0.002' --tauprior 'invgamma 3 0.04' \
+    --out "$ttmp" >/dev/null 2>&1
+check "species&tree prefix not doubled" "0" "$(grep -c 'species&tree = species&tree' "$ttmp" | tr -d ' ')"
+if [[ $HAVE_PY -eq 1 ]]; then
+    check "fully-specified template lints valid" "valid" "$(jget "$("$BIN" --json "$ttmp" 2>/dev/null)" status)"
+else
+    ok "fully-specified template (skipped: no python3)"
+fi
+rm -f "$ttmp"
+
 echo
 echo "== $pass passed, $fail failed =="
 [[ $fail -eq 0 ]]

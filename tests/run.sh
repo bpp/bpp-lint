@@ -292,6 +292,40 @@ else
 fi
 rm -f "$stf" "$ttmp2"
 
+# --- combined --template + --suggest-priors: one-shot valid control file (0.3.5) ---
+echo "-- --template + --suggest-priors (one-shot valid) --"
+sdir="$(mktemp -d)"
+# 4 species x 2 individuals, within- and between-species variation -> theta/tau derivable
+printf '8 32\nChi1  ACGTACGTATGTACGTACGTACGTACGTACGT\nChi2  ACGTACGTACGTACGTACGTACGTACGTACGT\nJap1  ACGTACGAACGTACGTACGTACGTAGGAACGT\nJap2  ACGTACGTACGTACGTACGTACGTAGGAAGGT\nKor1  ACGCACGTACGCGCGTACGCACGTACGTACGT\nKor2  ACGCACGTACGCACGTACGCACGTACGTACGT\nTai1  TCGTACGCACGTCTGTACGTACGTCCGTAGGT\nTai2  TCGTACGTACGTCTGTACGTACGTCCGTAGGT\n' > "$sdir/seqs.txt"
+printf 'Chi1 Chinese\nChi2 Chinese\nJap1 Japanese\nJap2 Japanese\nKor1 Korean\nKor2 Korean\nTai1 Taiwanese\nTai2 Taiwanese\n' > "$sdir/map.imap"
+printf 'species&tree = 4  Chinese Japanese Korean Taiwanese\n   2 2 2 2\n   (((Chinese,Japanese),Korean),Taiwanese);\n' > "$sdir/tree.stree"
+cout="$sdir/a.ctl"
+"$BIN" --template A00 --seqfile "$sdir/seqs.txt" --imapfile "$sdir/map.imap" \
+    --species-tree-file "$sdir/tree.stree" --nloci 1 --jobname t --suggest-priors \
+    --out "$cout" >/dev/null 2>&1
+check "combined template+suggest-priors exits 0" "0" "$?"
+grep -q 'thetaprior = invgamma' "$cout" && ok "combined fills thetaprior from data" || bad "combined fills thetaprior from data"
+grep -q 'tauprior = invgamma'   "$cout" && ok "combined fills tauprior from data"   || bad "combined fills tauprior from data"
+if [[ $HAVE_PY -eq 1 ]]; then
+    check "combined template+suggest-priors -> valid in ONE call" "valid" "$(jget "$("$BIN" --json "$cout" 2>/dev/null)" status)"
+else
+    ok "combined valid (skipped: no python3)"
+fi
+
+# requires --seqfile + --imapfile
+"$BIN" --template A00 --suggest-priors --out "$sdir/x.ctl" >/dev/null 2>&1
+check "combined without --seqfile/--imapfile errors" "2" "$?"
+
+# invariant data -> theta not derivable -> placeholder + nonzero exit (still honest)
+printf '4 8\nA1 ACGTACGT\nA2 ACGTACGT\nB1 ACGTACGT\nB2 ACGTACGT\n' > "$sdir/inv.txt"
+printf 'A1 A\nA2 A\nB1 B\nB2 B\n' > "$sdir/inv.imap"
+printf 'species&tree = 2  A B\n   2 2\n   (A,B);\n' > "$sdir/inv.stree"
+"$BIN" --template A00 --seqfile "$sdir/inv.txt" --imapfile "$sdir/inv.imap" \
+    --species-tree-file "$sdir/inv.stree" --nloci 1 --suggest-priors --out "$sdir/inv.ctl" >/dev/null 2>&1
+[[ "$?" -ne 0 ]] && ok "invariant data -> nonzero exit (theta underivable)" || bad "invariant data nonzero exit"
+grep -q 'thetaprior = ???' "$sdir/inv.ctl" && ok "invariant data leaves thetaprior placeholder" || bad "invariant data thetaprior placeholder"
+rm -rf "$sdir"
+
 echo
 echo "== $pass passed, $fail failed =="
 [[ $fail -eq 0 ]]

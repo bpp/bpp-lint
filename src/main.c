@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BPP_LINT_VERSION "0.3.4"
+#define BPP_LINT_VERSION "0.3.5"
 
 static void print_usage(FILE *out, const char *argv0) {
     fprintf(out,
@@ -53,6 +53,10 @@ static void print_usage(FILE *out, const char *argv0) {
         "                    Read the control file's seqfile + Imap and print\n"
         "                    recommended thetaprior / tauprior lines (invgamma\n"
         "                    with alpha=3, mean = data-derived estimate).\n"
+        "                    Combined with --template, instead FILLS the derived\n"
+        "                    thetaprior / tauprior into the scaffold (reading\n"
+        "                    --seqfile + --imapfile), producing a complete,\n"
+        "                    ready-to-run control file in one call.\n"
         "      --check-priors\n"
         "                    Same data-derived estimate, but compared against\n"
         "                    the control file's existing tauprior / thetaprior;\n"
@@ -727,6 +731,46 @@ int main(int argc, char **argv) {
 
     /* --template short-circuits: write a scaffold and exit (no input file). */
     if (template_type) {
+        /* --template + --suggest-priors: derive theta/tau from the data
+         * (--seqfile + --imapfile) and inject them as overrides, so the emitted
+         * control file is COMPLETE and valid in a single call (no drip loop).
+         * theta/tau buffers must outlive emit_template -> declare them here. */
+        char theta_buf[64], tau_buf[64];
+        int theta_underivable = 0;
+        if (do_suggest_priors) {
+            const char *seqf = NULL, *imapf = NULL;
+            int have_theta = 0, have_tau = 0;
+            for (int t = 0; t < n_tpl; t++) {
+                if (strcmp(tpl_keys[t], "seqfile") == 0)    seqf  = tpl_vals[t];
+                else if (strcmp(tpl_keys[t], "imapfile") == 0) imapf = tpl_vals[t];
+                else if (strcmp(tpl_keys[t], "thetaprior") == 0) have_theta = 1;
+                else if (strcmp(tpl_keys[t], "tauprior") == 0)   have_tau = 1;
+            }
+            if (!seqf || !imapf) {
+                fprintf(stderr, "%s: --template with --suggest-priors requires "
+                                "--seqfile and --imapfile\n", argv[0]);
+                return 2;
+            }
+            double theta_mean = 0, tau_mean = 0;
+            if (compute_priors_from_files(seqf, imapf, &theta_mean, &tau_mean) != 0)
+                return 2;
+            /* tau: fill from the data unless the user set it explicitly */
+            if (!have_tau && tau_mean > 0) {
+                snprintf(tau_buf, sizeof tau_buf, "invgamma 3 %.6g", tau_mean * 2.0);
+                tpl_keys[n_tpl] = "tauprior"; tpl_vals[n_tpl] = tau_buf; n_tpl++;
+            }
+            /* theta: fill from the data unless set explicitly. If it can't be
+             * derived (effectively invariant data -> mean 0), leave the placeholder
+             * and flag the file as not-yet-runnable via a nonzero exit. */
+            if (!have_theta) {
+                if (theta_mean > 0) {
+                    snprintf(theta_buf, sizeof theta_buf, "invgamma 3 %.6g", theta_mean * 2.0);
+                    tpl_keys[n_tpl] = "thetaprior"; tpl_vals[n_tpl] = theta_buf; n_tpl++;
+                } else {
+                    theta_underivable = 1;
+                }
+            }
+        }
         FILE *out = stdout;
         if (out_path) {
             out = fopen(out_path, "w");
@@ -744,6 +788,11 @@ int main(int argc, char **argv) {
         }
         if (!quiet && out_path)
             fprintf(stderr, "wrote %s control file to %s\n", template_type, out_path);
+        if (theta_underivable) {
+            fprintf(stderr, "%s: theta could not be derived (data effectively "
+                            "invariant); set thetaprior manually before running\n", argv[0]);
+            return 3;   /* file written but not yet runnable -> callers can prompt */
+        }
         return 0;
     }
 

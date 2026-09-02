@@ -47,6 +47,17 @@ static const bpp_code_doc_t codes[] = {
       "two 'seqfile =' lines run on the second file). Remove the duplicate, or\n"
       "keep only the line whose value you intend." },
 
+    { "006",
+      "Control file looks like it was written for the other run mode.",
+      "A --simulate-only keyword (e.g. treefile, loci&length -- one that never\n"
+      "applies to inference mode) is set, but the file is being linted in\n"
+      "inference mode (the default; --simulate/-s was not passed). BPP's\n"
+      "inference and simulation control files use different required-keyword\n"
+      "sets, so continuing to check this file as an inference control file\n"
+      "would produce a cascade of unrelated 'required' errors. Re-run with\n"
+      "-s/--simulate, or remove the simulate-only keyword if the file really is\n"
+      "meant for inference." },
+
     /* 01x: value-format problems */
     { "010",
       "'print' has fewer than 4 bits (legacy single-bit form).",

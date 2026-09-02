@@ -660,10 +660,44 @@ static void check_duplicate_keys(const bpp_file_t *f, bpp_diag_list_t *out) {
     }
 }
 
+/* Heuristic: is `f` a --simulate control file linted without -s/--simulate?
+ * Returns the first line assigning a --simulate-ONLY keyword (mode == MODE_SIM,
+ * not MODE_BOTH -- e.g. treefile, loci&length), or NULL if none is set. Such a
+ * keyword cannot appear in a genuine inference file, so its presence is a
+ * reliable signal that the whole must-set/conditional/defaults sweep below is
+ * about to assume the wrong keyword set entirely. */
+static const bpp_line_t *find_simulate_only_marker(const bpp_file_t *f) {
+    for (size_t i = 0; i < f->n; i++) {
+        if (!f->lines[i].key) continue;
+        const bpp_keyword_t *k = bpp_keyword_find(f->lines[i].key);
+        if (k && k->mode == MODE_SIM) return &f->lines[i];
+    }
+    return NULL;
+}
+
 static void check_completeness(const bpp_file_t *f, const bpp_lint_opts_t *opts,
                                bpp_diag_list_t *out, int *errors)
 {
     kw_mode_t mode = opts->simulate ? MODE_SIM : MODE_INFER;
+
+    if (mode == MODE_INFER) {
+        const bpp_line_t *marker = find_simulate_only_marker(f);
+        if (marker) {
+            emit(out, SEV_ERROR, marker->lineno, marker->key_col, "BPP006",
+                 xasprintf("'%s' is a --simulate-only keyword; this looks like "
+                           "a simulation control file linted in inference mode",
+                           marker->key_orig),
+                 xasprintf("re-run with -s/--simulate, or remove simulate-only "
+                           "keywords if this is meant to be an inference control file"),
+                 NULL, 0);
+            (*errors)++;
+            /* Skip the must-set / conditional / defaults checks below: they
+             * assume the inference keyword set the user never intended to
+             * satisfy, and would otherwise bury this one clear diagnostic
+             * under a cascade of misleading BPP100/101/103s. */
+            return;
+        }
+    }
 
     /* Track keywords already flagged as required-but-missing so we don't
      * also emit a misleading BPP103 "default will be used" for them. */

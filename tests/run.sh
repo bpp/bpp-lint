@@ -133,6 +133,20 @@ dout="$("$BIN" --json "$dtmp" 2>/dev/null)"
 printf '%s' "$dout" | grep -q '"code": "BPP005"' && ok "BPP005 fires on duplicate seqfile" || bad "BPP005 duplicate key"
 rm -f "$dtmp"
 
+# wrong-mode detection (BPP006): a --simulate control file linted without -s
+# must get ONE clear diagnostic, not a cascade of bogus BPP100/101/103s for
+# inference-only requirements the file never intended to satisfy.
+echo "-- wrong-mode (--simulate file linted without -s) check --"
+mtmp="$(mktemp)"
+printf 'seed=-1\nseqfile=x\ntreefile=t\nspecies&tree=2 A B\n   1 1\n   (A,B);\nloci&length=5 500\n' > "$mtmp"
+mout="$("$BIN" --json "$mtmp" 2>/dev/null)"
+printf '%s' "$mout" | grep -q '"code": "BPP006"' && ok "BPP006 fires on --simulate file without -s" || bad "BPP006 wrong-mode detection"
+printf '%s' "$mout" | grep -q '"code": "BPP100"' && bad "BPP100 cascade suppressed when BPP006 fires" || ok "BPP100 cascade suppressed when BPP006 fires"
+# same file WITH -s must be clean of BPP006 (no false positive in the right mode)
+sout="$("$BIN" --json -s "$mtmp" 2>/dev/null)"
+printf '%s' "$sout" | grep -q '"code": "BPP006"' && bad "no BPP006 false positive with --simulate" || ok "no BPP006 false positive with --simulate"
+rm -f "$mtmp"
+
 # 9. JSON schema carries suggestion (note) + structured default (for the editor).
 echo "-- json suggestion / structured default --"
 if [[ $HAVE_PY -eq 1 ]]; then

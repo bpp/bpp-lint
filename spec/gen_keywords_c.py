@@ -126,10 +126,16 @@ def fmt(e):
 
 # ---------- value grammar -> slot list (for generic value checking) ----------
 #
-# Compile the spec's value.grammar mini-language into a flat list of typed
-# slots the C validator can walk. Grammars that need real parsing (top-level
-# alternation with differing arities, Newick trees, multi-line blocks) or that
-# have a bespoke check in lint.c compile to None and are skipped.
+# Compile the spec's value.grammar mini-language into typed slot lists the C
+# validator can walk. Atoms: b d +d f s (typed slots), an integer literal or a
+# literal choice '(2|3)' (a discriminator slot), a word choice '(dir|iid)' (an
+# enum string slot), '[...]' (optional), 'x*' (trailing repetition). Top-level
+# 'A | B | C' compiles to several alternatives, each led by its literal
+# discriminators, so a keyword whose arity depends on an earlier value
+# (speciesdelimitation, clock, locusrate, heredity) is checked against the
+# form that its leading values select. Grammars that need real parsing
+# (Newick trees, multi-line blocks) or that have a bespoke check in lint.c
+# compile to None and are skipped.
 
 ATOM_TYPE = {"b": "VT_BOOL", "d": "VT_INT", "+d": "VT_UINT",
              "f": "VT_FLOAT", "s": "VT_STRING"}
@@ -137,11 +143,13 @@ ATOM_TYPE = {"b": "VT_BOOL", "d": "VT_INT", "+d": "VT_UINT",
 # Keywords with a bespoke check in lint.c (check_*), or a semantically
 # conditional grammar the flat slot checker must not second-guess. These are
 # skipped by the generic checker even when their grammar looks reducible.
-CUSTOM_CHECK = {"print", "thetaprior", "tauprior", "phiprior",
-                "finetune", "locusrate", "clock"}
+CUSTOM_CHECK = {"print", "thetaprior", "tauprior", "phiprior", "finetune"}
 
 
 def grammar_tokens(g):
+    """Split a grammar (or one alternative of it) into atoms. Brackets and '*'
+    are their own tokens; a parenthesised choice like '(2|3)' or '(dir|iid)'
+    is one atom (it contains no whitespace)."""
     toks, i = [], 0
     while i < len(g):
         c = g[i]
@@ -150,17 +158,58 @@ def grammar_tokens(g):
         elif c in "[]*":
             toks.append(c)
             i += 1
+        elif c == "(":
+            j = g.index(")", i)
+            toks.append(g[i:j + 1])
+            i = j + 1
         else:
             j = i
-            while j < len(g) and not g[j].isspace() and g[j] not in "[]*":
+            while j < len(g) and not g[j].isspace() and g[j] not in "[]*(":
                 j += 1
             toks.append(g[i:j])
             i = j
     return toks
 
 
+def split_alternatives(g):
+    """Split on top-level '|' (outside parentheses). A plain grammar yields a
+    single alternative."""
+    alts, depth, cur = [], 0, ""
+    for c in g:
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        if c == "|" and depth == 0:
+            alts.append(cur.strip())
+            cur = ""
+        else:
+            cur += c
+    alts.append(cur.strip())
+    return alts
+
+
+INT_RE = re.compile(r'^-?\d+$')
+
+
+def literal_slot(values):
+    """A discriminator slot for an integer literal (one value) or a literal
+    choice like (2|3): bounded to [min, max]. Non-contiguous choices are
+    rendered as an exact-match string enum instead."""
+    values = sorted(set(values))
+    if values[-1] - values[0] + 1 == len(values):
+        return {"type": "VT_UINT" if values[0] >= 0 else "VT_INT",
+                "literal": True,
+                "has_min": True, "min": float(values[0]),
+                "has_max": True, "max": float(values[-1])}
+    return {"type": "VT_STRING", "literal": True,
+            "enums": [str(v) for v in values]}
+
+
 def apply_constraints(val, slots):
-    numeric = [s for s in slots if s["type"] in ("VT_INT", "VT_UINT", "VT_FLOAT")]
+    # Constraints from the spec never target a literal discriminator.
+    numeric = [s for s in slots
+               if s["type"] in ("VT_INT", "VT_UINT", "VT_FLOAT") and not s.get("literal")]
 
     def set_min(s, lo, excl=False):
         s["has_min"] = True
@@ -175,7 +224,7 @@ def apply_constraints(val, slots):
     enum = val.get("enum")
     if enum:
         for s in slots:
-            if s["type"] == "VT_STRING":
+            if s["type"] == "VT_STRING" and not s.get("enums"):
                 s["enums"] = list(enum)
                 break
 
@@ -200,46 +249,70 @@ def apply_constraints(val, slots):
                 set_min(s, m.group(1))
 
 
+def compile_sequence(g, val):
+    """Compile one alternative (a plain atom sequence) into a slot list, or
+    None if it needs real parsing."""
+    # anything that still needs real parsing -> bail out (skip generic check)
+    if re.search(r'[,;]', g) or re.search(r'\((?:[^()]*\s)[^()]*\)', g) \
+            or re.search(r'\b(t|dist|int)\b', g):
+        return None
+    slots, depth = [], 0
+    for t in grammar_tokens(g):
+        if t == "[":
+            depth += 1
+        elif t == "]":
+            depth -= 1
+        elif t == "*":
+            if slots:
+                slots[-1]["repeat"] = True
+        elif t in ATOM_TYPE:
+            slots.append({"type": ATOM_TYPE[t], "optional": depth > 0})
+        elif INT_RE.match(t):
+            slots.append(dict(literal_slot([int(t)]), optional=depth > 0))
+        elif t.startswith("(") and t.endswith(")"):
+            choices = [c.strip() for c in t[1:-1].split("|")]
+            if all(INT_RE.match(c) for c in choices):
+                slots.append(dict(literal_slot([int(c) for c in choices]), optional=depth > 0))
+            else:
+                slots.append({"type": "VT_STRING", "optional": depth > 0, "enums": choices})
+        else:
+            return None  # unknown atom
+    if not slots:
+        return None
+    apply_constraints(val, slots)
+    return slots
+
+
 def compile_grammar(name, rec):
+    """Return (alts, forms, suggest) for a keyword, or None if its grammar is
+    irreducible or it has a bespoke check in lint.c. `alts` is a list of slot
+    lists; a grammar with top-level alternation ("0 | 1 0 f | 1 1 f f")
+    yields one per alternative, each led by literal discriminator slots."""
     if name in CUSTOM_CHECK:
         return None
     val = rec.get("value") or {}
     g = val.get("grammar")
     if not g:
         return None
-    g = g.strip()
-    slots = []
-
-    # leading integer-literal choice, e.g. "(0|1) f f f f" -> one bounded slot
-    m = re.match(r'\(\s*(-?\d+)\s*\|\s*(-?\d+)\s*\)\s*(.*)$', g)
-    if m:
-        lo, hi = sorted((int(m.group(1)), int(m.group(2))))
-        slots.append({"type": "VT_UINT" if lo >= 0 else "VT_INT",
-                      "has_min": True, "min": float(lo),
-                      "has_max": True, "max": float(hi)})
-        g = m.group(3).strip()
-
-    # anything left that needs real parsing -> bail out (skip generic check)
-    if re.search(r'[()|,;]', g) or re.search(r'\b(t|dist|int)\b', g):
-        return None
-
-    in_opt = False
-    for t in grammar_tokens(g):
-        if t == "[":
-            in_opt = True
-        elif t == "]":
-            in_opt = False
-        elif t == "*":
-            if slots:
-                slots[-1]["repeat"] = True
-        elif t in ATOM_TYPE:
-            slots.append({"type": ATOM_TYPE[t], "optional": in_opt})
-        else:
-            return None  # unknown atom/literal
-    if not slots:
-        return None
-    apply_constraints(val, slots)
-    return slots
+    parts = split_alternatives(g.strip())
+    alts = []
+    for part in parts:
+        slots = compile_sequence(part, val)
+        if slots is None:
+            return None
+        alts.append(slots)
+    if len(alts) > 1:
+        # every alternative must start with a discriminator, or the checker
+        # could not tell them apart
+        for part, slots in zip(parts, alts):
+            if not slots[0].get("literal"):
+                raise SystemExit(f"{name}: alternative '{part}' does not start with a literal")
+    forms = val.get("forms")
+    if forms is not None and len(forms) != len(alts):
+        raise SystemExit(f"{name}: 'forms' has {len(forms)} entries for {len(alts)} alternatives")
+    if forms is None:
+        forms = parts if len(parts) > 1 else None
+    return alts, forms, val.get("suggest")
 
 
 def cident(name):
@@ -256,6 +329,8 @@ def slot_c(s, enum_ref):
         parts += [".has_min = 1", f".min = {s['min']:g}"]
     if s.get("min_excl"):
         parts.append(".min_excl = 1")
+    if s.get("literal"):
+        parts.append(".literal = 1")
     if s.get("has_max"):
         parts += [".has_max = 1", f".max = {s['max']:g}"]
     if s.get("enums"):
@@ -313,34 +388,52 @@ def main():
     L.append("")
 
     # ---- value grammar slot tables ----
-    profiles = []  # (name, ident, slots)
+    profiles = []  # (name, ident, alts, forms, suggest)
     for name, rec in kws.items():
         if not rec.get("current"):
             continue
-        slots = compile_grammar(name, rec)
-        if slots:
-            profiles.append((name, cident(name), slots))
+        compiled = compile_grammar(name, rec)
+        if compiled:
+            alts, forms, suggest = compiled
+            profiles.append((name, cident(name), alts, forms, suggest))
 
+    n_alt = sum(1 for p in profiles if len(p[2]) > 1)
     L.append("/* ===== Value grammars: typed slot lists compiled from")
     L.append(" * spec value.grammar, walked by lint.c's generic value checker.")
     L.append(f" * {len(profiles)} of {len(valid_infer) + len(valid_sim)} live keywords have a")
-    L.append(" * reducible grammar; the rest (alternation / Newick / multi-line /")
-    L.append(" * bespoke-checked) are validated elsewhere or not at all. ===== */")
+    L.append(" * reducible grammar; the rest (Newick / multi-line / bespoke-checked)")
+    L.append(" * are validated elsewhere or not at all.")
+    L.append(f" * {n_alt} keyword(s) have several alternative forms discriminated by")
+    L.append(" * leading literal values (e.g. speciesdelimitation: '0' | '1 0 e' |")
+    L.append(" * '1 1 a m'); the checker validates arity against the matching form. ===== */")
     L.append("")
-    for name, ident, slots in profiles:
-        enum_ref = "NULL"
-        for s in slots:
-            if s.get("enums"):
-                enum_ref = f"enum_{ident}"
-                items = ", ".join(f'"{e}"' for e in s["enums"])
-                L.append(f"static const char *const {enum_ref}[] = {{ {items}, NULL }};")
-        row = ", ".join(slot_c(s, enum_ref) for s in slots)
-        L.append(f"static const kw_slot_t slots_{ident}[] = {{ {row}, {{ .type = VT_END }} }};")
+    for name, ident, alts, forms, suggest in profiles:
+        n_enum = 0
+        slot_names = []
+        for ai, slots in enumerate(alts):
+            sname = f"slots_{ident}" if len(alts) == 1 else f"slots_{ident}_{ai}"
+            slot_names.append(sname)
+            refs = []
+            for sl in slots:
+                ref = "NULL"
+                if sl.get("enums"):
+                    ref = f"enum_{ident}" if n_enum == 0 else f"enum_{ident}_{n_enum}"
+                    n_enum += 1
+                    items = ", ".join(f'"{e}"' for e in sl["enums"])
+                    L.append(f"static const char *const {ref}[] = {{ {items}, NULL }};")
+                refs.append(ref)
+            row = ", ".join(slot_c(sl, ref) for sl, ref in zip(slots, refs))
+            L.append(f"static const kw_slot_t {sname}[] = {{ {row}, {{ .type = VT_END }} }};")
+        L.append(f"static const kw_slot_t *const alts_{ident}[] = {{ {', '.join(slot_names)}, NULL }};")
+        if forms:
+            items = ", ".join(cstr(f) for f in forms)
+            L.append(f"static const char *const forms_{ident}[] = {{ {items}, NULL }};")
     L.append("")
     L.append("const kw_valuespec_t kw_value_table[] = {")
-    for name, ident, _ in profiles:
-        L.append(f'    {{ {cstr(name)}, slots_{ident} }},')
-    L.append("    { NULL, NULL }")
+    for name, ident, alts, forms, suggest in profiles:
+        fref = f"forms_{ident}" if forms else "NULL"
+        L.append(f'    {{ {cstr(name)}, alts_{ident}, {fref}, {cstr(suggest)} }},')
+    L.append("    { NULL, NULL, NULL, NULL }")
     L.append("};")
     L.append("")
 

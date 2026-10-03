@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -273,4 +274,18 @@ void bpp_file_free(bpp_file_t *f) {
     f->lines = NULL;
     f->path  = NULL;
     f->n = f->cap = 0;
+}
+
+char *bpp_asprintf(const char *fmt, ...) {
+    va_list ap, ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (n < 0) { va_end(ap2); return NULL; }
+    char *buf = malloc((size_t) n + 1);
+    if (!buf) { va_end(ap2); return NULL; }
+    vsnprintf(buf, (size_t) n + 1, fmt, ap2);
+    va_end(ap2);
+    return buf;
 }

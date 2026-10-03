@@ -83,4 +83,16 @@ int  bpp_file_write(const bpp_file_t *f, const char *path);
 
 void bpp_diag_list_free(bpp_diag_list_t *list);
 
+/* Append a diagnostic (no auto-fix). Takes ownership of `msg` and
+ * `suggestion` (malloc'd; `suggestion` may be NULL). Used by passes that
+ * live outside lint.c, such as the data-consistency checks. */
+void bpp_diag_add(bpp_diag_list_t *list, bpp_severity_t sev, int lineno, int col,
+                  const char *code, char *msg, char *suggestion);
+
+/* Species names from the species&tree header (the tokens after N), as a
+ * malloc'd array of malloc'd strings; *out_n receives the count (0 and NULL
+ * if the block is absent). Free with bpp_names_free. */
+char **bpp_species_tree_names(const bpp_file_t *f, int *out_n);
+void   bpp_names_free(char **names, int n);
+
 #endif

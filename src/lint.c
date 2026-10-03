@@ -115,6 +115,11 @@ static void emit(bpp_diag_list_t *list, bpp_severity_t sev, int lineno, int col,
     d->replacement_lineno  = replacement_lineno;
 }
 
+void bpp_diag_add(bpp_diag_list_t *list, bpp_severity_t sev, int lineno, int col,
+                  const char *code, char *msg, char *suggestion) {
+    emit(list, sev, lineno, col, code, msg, suggestion, NULL, 0);
+}
+
 void bpp_diag_list_free(bpp_diag_list_t *list) {
     if (!list) return;
     for (size_t i = 0; i < list->n; i++) {
@@ -250,7 +255,7 @@ static void check_print(bpp_diag_list_t *out, const bpp_line_t *line) {
         /* Auto-fix: preserve the user's first bit, pad with zeros to 5 fields.
          * This is the safe interpretation: "user wanted samples printed and
          * nothing else extra". */
-        char new_value[32];
+        char new_value[80];   /* tok is at most 63 chars */
         snprintf(new_value, sizeof(new_value), "%s 0 0 0 0", tok);
         char *fix = build_renamed_line(line, "print", new_value);
         emit(out, SEV_ERROR, line->lineno, line->val_col, "BPP010",
@@ -415,7 +420,9 @@ static void check_finetune_positional(bpp_diag_list_t *out, const bpp_line_t *li
     }
 }
 
-static void check_locusrate_legacy(bpp_diag_list_t *out, const bpp_line_t *line) {
+/* Returns 1 if the legacy diagnostic fired (the generic arity check is then
+ * skipped so the same line is not reported twice). */
+static int check_locusrate_legacy(bpp_diag_list_t *out, const bpp_line_t *line) {
     /* Legacy form: 'locusrate = 1 alpha' (2 tokens). BPP 4.x post-v4.1.4
      * needs >=4 tokens for prior=1, or just '0', '2 <file>', '3 a b'. */
     int n = count_tokens(line->value);
@@ -428,8 +435,10 @@ static void check_locusrate_legacy(bpp_diag_list_t *out, const bpp_line_t *line)
                  xasprintf("'locusrate = 1 <alpha>' is the pre-v4.1.4 form"),
                  xasprintf("v4.1.4+ expects 'locusrate = 1 a_mubar b_mubar a_mui [DIR|IID]'"),
                  NULL, 0);
+            return 1;
         }
     }
+    return 0;
 }
 
 /* ---------- generic grammar-driven value check ----------
@@ -526,14 +535,113 @@ static void check_slot_token(bpp_diag_list_t *out, const bpp_line_t *L,
     }
 }
 
+/* Does token `tok` satisfy literal discriminator slot `s`? */
+static int literal_matches(const kw_slot_t *s, const char *tok) {
+    if (s->type == VT_STRING) {
+        for (int i = 0; s->enums && s->enums[i]; i++)
+            if (strcmp(tok, s->enums[i]) == 0) return 1;
+        return 0;
+    }
+    long v;
+    if (!parse_long_strict(tok, &v)) return 0;
+    return (double) v >= s->min && (double) v <= s->max;
+}
+
+/* Join the human-readable forms selected by `use[]` with " | " (caller frees). */
+static char *join_forms(const kw_valuespec_t *vs, const int *use, int n_alts) {
+    size_t len = 1;
+    for (int a = 0; a < n_alts; a++)
+        if (use[a] && vs->forms && vs->forms[a]) len += strlen(vs->forms[a]) + 5;
+    char *buf = malloc(len);
+    if (!buf) return NULL;
+    buf[0] = '\0';
+    int first = 1;
+    for (int a = 0; a < n_alts; a++) {
+        if (!use[a] || !vs->forms || !vs->forms[a]) continue;
+        if (!first) strcat(buf, " | ");
+        strcat(buf, "'");
+        strcat(buf, vs->forms[a]);
+        strcat(buf, "'");
+        first = 0;
+    }
+    return buf;
+}
+
+/* Suggestion text for an arity error: the spec's recommended complete value,
+ * if any ("e.g. 'speciesdelimitation = 1 0 2'"). An auto-fix is attached only
+ * when the user typed nothing but the switch itself (one token, equal to the
+ * suggestion's first token), so no parameter of theirs is overwritten. */
+static void arity_fix(const kw_valuespec_t *vs, const bpp_line_t *L,
+                      char **toks, int n, char **sugg, char **fix) {
+    *sugg = NULL; *fix = NULL;
+    if (!vs->suggest) return;
+    *sugg = xasprintf("e.g. '%s = %s'", L->key_orig, vs->suggest);
+    if (n != 1) return;
+    size_t k = strlen(toks[0]);
+    if (strncmp(vs->suggest, toks[0], k) == 0 &&
+        (vs->suggest[k] == '\0' || isspace((unsigned char) vs->suggest[k])))
+        *fix = build_renamed_line(L, L->key_orig, vs->suggest);
+}
+
 static void check_value_generic(bpp_diag_list_t *out, const bpp_line_t *L) {
-    const kw_slot_t *slots = bpp_keyword_slots(L->key);
-    if (!slots) return;
+    const kw_valuespec_t *vs = bpp_keyword_valuespec(L->key);
+    if (!vs || !vs->alts || !vs->alts[0]) return;
     if (!L->value || bpp_is_blank(L->value)) return;  /* empty -> BPP004 */
 
     char *toks[64];
     int n = bpp_tokenise_value(L->value, toks, 64);
     if (n <= 0) return;
+
+    int n_alts = 0;
+    while (vs->alts[n_alts]) n_alts++;
+
+    /* Pick the alternative form. A form is compatible when every literal
+     * discriminator it has within the first n tokens matches the token in
+     * that position (speciesdelimitation '1 0 f' needs tokens 0 and 1 to be
+     * 1 and 0). Several forms stay compatible only when the value stops
+     * before the discriminators do -- an incomplete value. */
+    const kw_slot_t *slots = NULL;
+    int compat[32] = {0}, n_compat = 0;
+    if (n_alts == 1) {
+        slots = vs->alts[0];
+    } else {
+        for (int a = 0; a < n_alts && a < 32; a++) {
+            const kw_slot_t *s = vs->alts[a];
+            int ok = 1;
+            for (int i = 0; s[i].type != VT_END && i < n; i++) {
+                if (s[i].literal && !literal_matches(&s[i], toks[i])) { ok = 0; break; }
+            }
+            compat[a] = ok;
+            if (ok) { n_compat++; slots = s; }
+        }
+        if (n_compat == 0) {
+            int all[32];
+            for (int a = 0; a < 32; a++) all[a] = 1;
+            char *forms = join_forms(vs, all, n_alts);
+            emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP019",
+                 xasprintf("'%s = %s' is not a recognised form", L->key_orig, L->value),
+                 forms ? xasprintf("valid forms: %s", forms) : NULL, NULL, 0);
+            free(forms);
+            bpp_tokens_free(toks, n);
+            return;
+        }
+        if (n_compat > 1) {
+            char *forms = join_forms(vs, compat, n_alts);
+            char *sugg = NULL, *fix = NULL;
+            arity_fix(vs, L, toks, n, &sugg, &fix);
+            char *note = forms
+                ? xasprintf("incomplete; valid forms: %s%s%s", forms,
+                            sugg ? "; " : "", sugg ? sugg : "")
+                : sugg;
+            if (forms) free(sugg);
+            emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP017",
+                 xasprintf("'%s = %s' has too few values", L->key_orig, L->value),
+                 note, fix, fix ? L->lineno : 0);
+            free(forms);
+            bpp_tokens_free(toks, n);
+            return;
+        }
+    }
 
     int required = 0, listed = 0, has_repeat = 0;
     const kw_slot_t *rep = NULL;
@@ -542,16 +650,24 @@ static void check_value_generic(bpp_diag_list_t *out, const bpp_line_t *L) {
         else { listed++; if (!s->optional) required++; }
     }
 
-    if (n < required) {
+    if (n < required || (!has_repeat && n > listed)) {
+        /* Name the form when there are several, so the count makes sense. */
+        const char *form = NULL;
+        if (n_alts > 1 && vs->forms)
+            for (int a = 0; a < n_alts; a++) if (compat[a]) form = vs->forms[a];
+        char *count = (required == listed && !has_repeat)
+            ? xasprintf("exactly %d value%s", listed, listed == 1 ? "" : "s")
+            : (n < required
+               ? xasprintf("at least %d value%s", required, required == 1 ? "" : "s")
+               : xasprintf("at most %d value%s", listed, listed == 1 ? "" : "s"));
+        char *sugg = NULL, *fix = NULL;
+        if (n < required) arity_fix(vs, L, toks, n, &sugg, &fix);
         emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP017",
-             xasprintf("'%s' expects at least %d value%s, got %d",
-                       L->key_orig, required, required == 1 ? "" : "s", n),
-             NULL, NULL, 0);
-    } else if (!has_repeat && n > listed) {
-        emit(out, SEV_ERROR, L->lineno, L->val_col, "BPP017",
-             xasprintf("'%s' expects at most %d value%s, got %d",
-                       L->key_orig, listed, listed == 1 ? "" : "s", n),
-             NULL, NULL, 0);
+             form ? xasprintf("'%s = %s' expects %s (form '%s'), got %d",
+                              L->key_orig, L->value, count, form, n)
+                  : xasprintf("'%s' expects %s, got %d", L->key_orig, count, n),
+             sugg, fix, fix ? L->lineno : 0);
+        free(count);
     }
 
     const kw_slot_t *s = slots;
@@ -563,7 +679,9 @@ static void check_value_generic(bpp_diag_list_t *out, const bpp_line_t *L) {
         } else {
             use = has_repeat ? rep : NULL;
         }
-        if (use && use->type != VT_END) check_slot_token(out, L, use, toks[i], i + 1);
+        /* discriminators already matched above (multi-form keywords) */
+        if (use && use->type != VT_END && !(n_alts > 1 && use->literal))
+            check_slot_token(out, L, use, toks[i], i + 1);
     }
     bpp_tokens_free(toks, n);
 }
@@ -1003,6 +1121,38 @@ static void rule_migration_no_speciestree(const bpp_file_t *f, bpp_diag_list_t *
     (*errors)++;
 }
 
+/* R7: the number of 'phase' digits must equal the species count. BPP checks
+ * this in update_sp_seqcount (cfile.c:2486-2491, "Number of digits in 'phase'
+ * does not match number of species") and again in treeparse.c:2198 -- but
+ * only when opt_diploid is non-NULL. parse_diploid (cfile.c:573-636) frees an
+ * all-zero vector, so an all-zero line of the wrong length is silently
+ * ignored: warning, not error. */
+static void rule_phase_count(const bpp_file_t *f, bpp_diag_list_t *out, int *errors) {
+    const bpp_line_t *ph = find_set_line(f, "phase");
+    if (!ph || !ph->value) return;
+    const bpp_line_t *st = find_set_line(f, "species&tree");
+    int N = (st && st->value) ? first_int(st->value) : 0;
+    if (N <= 0) return;
+    int n = count_tokens(ph->value);
+    if (n == N) return;
+    if (phase_has_unphased_bit(ph->value)) {
+        emit(out, SEV_ERROR, ph->lineno, ph->val_col, "BPP155",
+             xasprintf("'phase' has %d digit%s but 'species&tree' declares %d species; "
+                       "BPP aborts (\"Number of digits in 'phase' does not match number of species\")",
+                       n, n == 1 ? "" : "s", N),
+             xasprintf("give exactly one 0/1 per species, in the order of the species&tree header"),
+             NULL, 0);
+        (*errors)++;
+    } else {
+        emit(out, SEV_WARNING, ph->lineno, ph->val_col, "BPP155",
+             xasprintf("'phase' has %d digit%s for %d species; BPP discards an all-zero "
+                       "phase line before counting, so this is harmless until a 1 is added",
+                       n, n == 1 ? "" : "s", N),
+             xasprintf("give one 0/1 per species (%d), or delete the line (phase defaults to 0)", N),
+             NULL, 0);
+    }
+}
+
 typedef void (*cross_check_fn)(const bpp_file_t *f, bpp_diag_list_t *out, int *errors);
 
 static const struct {
@@ -1017,6 +1167,7 @@ static const struct {
     { "BPP125", rule_datefile_locusrate3 },
     { "BPP126", rule_locusrate3_needs_datefile },
     { "BPP127", rule_migration_no_speciestree },
+    { "BPP155", rule_phase_count },
     { NULL, NULL }
 };
 
@@ -1772,6 +1923,29 @@ static void check_migration_block(const bpp_file_t *f,
     mtree_free(&tree);
 }
 
+/* ---------- species&tree header names (shared with datacheck.c) ---------- */
+
+char **bpp_species_tree_names(const bpp_file_t *f, int *out_n) {
+    *out_n = 0;
+    const bpp_line_t *header = find_set_line(f, "species&tree");
+    if (!header || !header->value) return NULL;
+    char *tokens[256];
+    int nt = bpp_tokenise_value(header->value, tokens, 256);
+    if (nt < 2) { if (nt > 0) bpp_tokens_free(tokens, nt); return NULL; }
+    char **names = malloc((size_t)(nt - 1) * sizeof(char *));
+    if (!names) { bpp_tokens_free(tokens, nt); return NULL; }
+    for (int i = 1; i < nt; i++) names[i - 1] = bpp_strdup(tokens[i]);
+    bpp_tokens_free(tokens, nt);
+    *out_n = nt - 1;
+    return names;
+}
+
+void bpp_names_free(char **names, int n) {
+    if (!names) return;
+    for (int i = 0; i < n; i++) free(names[i]);
+    free(names);
+}
+
 /* ---------- main lint pass ---------- */
 
 int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
@@ -1809,6 +1983,11 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
                 const char *p = N->raw;
                 while (*p && isspace((unsigned char) *p)) p++;
                 if (*p != '*' && *p != '#') {
+                    /* A 'key = value' line ends the block early (a one-species
+                     * species&tree has a counts line but no Newick; sloppy
+                     * files omit even that). A Newick line may contain '=' in
+                     * an extended-Newick annotation, so '(' still continues. */
+                    if (N->key && *p != '(' && bpp_strieq(L->key, "species&tree")) break;
                     skip[j] = 1;
                     followups--;
                 }
@@ -1924,11 +2103,13 @@ int bpp_lint(const bpp_file_t *f, const bpp_lint_opts_t *opts,
             else if (bpp_strieq(L->key, "tauprior"))   check_tauprior(out, L);
             else if (bpp_strieq(L->key, "phiprior"))   check_phiprior(out, L);
             else if (bpp_strieq(L->key, "finetune"))   check_finetune_positional(out, L);
-            else if (bpp_strieq(L->key, "locusrate") && mode == MODE_INFER) check_locusrate_legacy(out, L);
+            int skip_generic = 0;
+            if (bpp_strieq(L->key, "locusrate") && mode == MODE_INFER)
+                skip_generic = check_locusrate_legacy(out, L);
 
             /* Generic grammar-driven check for every keyword with a reducible
              * value grammar (no-op for the bespoke-checked ones above). */
-            check_value_generic(out, L);
+            if (!skip_generic) check_value_generic(out, L);
 
             /* Empty value */
             if (L->value && bpp_is_blank(L->value)

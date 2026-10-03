@@ -4,6 +4,7 @@
 #include <strings.h>
 
 #include "codes.h"
+#include "datacheck.h"
 #include "imap.h"
 #include "lex.h"
 #include "lint.h"
@@ -15,7 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BPP_LINT_VERSION "0.3.5"
+#define BPP_LINT_VERSION "0.4.0"
 
 static void print_usage(FILE *out, const char *argv0) {
     fprintf(out,
@@ -40,6 +41,12 @@ static void print_usage(FILE *out, const char *argv0) {
         "  -q, --quiet       Print only errors; suppress warnings and notes.\n"
         "      --no-defaults Suppress informational warnings about optional\n"
         "                    keywords falling back to BPP's default (code 103).\n"
+        "      --no-data-checks\n"
+        "                    Skip the data-consistency pass (codes 150-157): by\n"
+        "                    default the seqfile and Imapfile named in the control\n"
+        "                    file are opened and checked against it (missing\n"
+        "                    files, nloci vs loci present, sequence tags vs Imap,\n"
+        "                    Imap species vs species&tree). Inference mode only.\n"
         "      --codes       Show diagnostic codes (e.g. '[020]') in output.\n"
         "                    Off by default; useful when filtering with grep.\n"
         "      --color=WHEN  Colorize output. WHEN is 'auto' (default), 'always',\n"
@@ -61,6 +68,8 @@ static void print_usage(FILE *out, const char *argv0) {
         "                    Same data-derived estimate, but compared against\n"
         "                    the control file's existing tauprior / thetaprior;\n"
         "                    warns (BPP110/BPP111) when more than ~10x off.\n"
+        , argv0);
+    fputs(
         "      --json        Emit a machine-readable JSON report (status,\n"
         "                    diagnostics, counts) to stdout instead of the\n"
         "                    human-readable diagnostics. Consumers use\n"
@@ -71,7 +80,8 @@ static void print_usage(FILE *out, const char *argv0) {
         "                    (A00|A01|A10|A11) and exit. Fills practical defaults\n"
         "                    and any --<field> VALUE overrides (--seqfile,\n"
         "                    --imapfile, --species-tree, --thetaprior, --tauprior,\n"
-        "                    --nloci, ...); required fields left unset are marked\n"
+        "                    --nloci, --speciesdelimitation, ...); required fields\n"
+        "                    left unset are marked\n"
         "                    so a follow-up lint reports them. Use --out PATH to\n"
         "                    write to a file (default stdout).\n"
         "      --out PATH    Destination for --template (default: stdout).\n"
@@ -86,7 +96,7 @@ static void print_usage(FILE *out, const char *argv0) {
         "  0  no errors (warnings may still be present)\n"
         "  1  at least one error reported\n"
         "  2  invocation error (bad arguments, missing file, I/O failure)\n",
-        argv0);
+        out);
 }
 
 static int filter_quiet(bpp_diag_list_t *list) {
@@ -109,49 +119,6 @@ static int filter_quiet(bpp_diag_list_t *list) {
 
 /* ---------- helpers for the priors features ---------- */
 
-/* Allocate a string holding the directory portion of `path` (without trailing
- * slash). Returns "." if `path` has no slash. Caller frees. */
-static char *path_dirname(const char *path) {
-    const char *slash = strrchr(path, '/');
-    if (!slash) return bpp_strdup(".");
-    if (slash == path) return bpp_strdup("/");
-    size_t n = (size_t)(slash - path);
-    char *d = malloc(n + 1);
-    if (!d) return NULL;
-    memcpy(d, path, n);
-    d[n] = '\0';
-    return d;
-}
-
-/* If `name` is absolute, return a fresh copy. Otherwise return "<dir>/<name>". */
-static char *path_join(const char *dir, const char *name) {
-    if (name[0] == '/') return bpp_strdup(name);
-    size_t dn = strlen(dir), nn = strlen(name);
-    char *out = malloc(dn + 1 + nn + 1);
-    if (!out) return NULL;
-    memcpy(out, dir, dn);
-    out[dn] = '/';
-    memcpy(out + dn + 1, name, nn);
-    out[dn + 1 + nn] = '\0';
-    return out;
-}
-
-/* Pull a single string value out of a parsed line (NULL-safe trim). Caller
- * frees. */
-static char *first_token_dup(const char *value) {
-    if (!value) return NULL;
-    while (*value && isspace((unsigned char) *value)) value++;
-    const char *end = value;
-    while (*end && !isspace((unsigned char) *end)) end++;
-    if (end == value) return NULL;
-    size_t n = (size_t)(end - value);
-    char *s = malloc(n + 1);
-    if (!s) return NULL;
-    memcpy(s, value, n);
-    s[n] = '\0';
-    return s;
-}
-
 /* Locate a key in a parsed control file. */
 static const bpp_line_t *cfile_find(const bpp_file_t *f, const char *key) {
     for (size_t i = 0; i < f->n; i++) {
@@ -160,68 +127,22 @@ static const bpp_line_t *cfile_find(const bpp_file_t *f, const char *key) {
     return NULL;
 }
 
-/* Resolve seqfile + imapfile paths against the control file's directory.
- * On success, fills *seq_out / *imap_out (caller frees) and returns 0;
- * on failure (either key missing or alloc fails), prints to stderr and
- * returns -1. */
-static int resolve_data_paths(const bpp_file_t *cfile,
-                              const char *cfile_path,
-                              char **seq_out, char **imap_out)
+/* Compute prior means from an already-loaded alignment + Imap. Returns 0 on
+ * success. The data is loaded once (datacheck.c's bpp_data_load) and shared
+ * between the data-consistency checks and the priors features. */
+static int compute_priors_from_data(const bpp_alignment_t *al, const bpp_imap_t *imap,
+                                    double *theta_mean, double *tau_mean)
 {
-    *seq_out = *imap_out = NULL;
-    const bpp_line_t *seq_line  = cfile_find(cfile, "seqfile");
-    const bpp_line_t *imap_line = cfile_find(cfile, "imapfile");
-    if (!seq_line || !imap_line) {
-        fprintf(stderr, "bpp-lint: priors require both 'seqfile' and 'imapfile' to be set in %s\n",
-                cfile_path);
-        return -1;
-    }
-    char *seq_name  = first_token_dup(seq_line->value);
-    char *imap_name = first_token_dup(imap_line->value);
-    if (!seq_name || !imap_name) {
-        free(seq_name); free(imap_name);
-        fprintf(stderr, "bpp-lint: seqfile or imapfile has no value\n");
-        return -1;
-    }
-    char *dir = path_dirname(cfile_path);
-    if (!dir) { free(seq_name); free(imap_name); return -1; }
-    *seq_out  = path_join(dir, seq_name);
-    *imap_out = path_join(dir, imap_name);
-    free(dir); free(seq_name); free(imap_name);
-    if (!*seq_out || !*imap_out) {
-        free(*seq_out); free(*imap_out);
-        *seq_out = *imap_out = NULL;
-        return -1;
-    }
-    return 0;
-}
-
-/* Compute prior means from the data files. Returns 0 on success. */
-static int compute_priors_from_files(const char *seqfile_path,
-                                     const char *imapfile_path,
-                                     double *theta_mean, double *tau_mean)
-{
-    bpp_imap_t      imap = {0};
-    bpp_alignment_t al   = {0};
     bpp_seq_grouping_t g = {0};
     int rc = -1;
-
-    if (bpp_imap_load(&imap, imapfile_path) != 0) {
-        fprintf(stderr, "bpp-lint: cannot read imap file '%s'\n", imapfile_path);
-        goto out;
-    }
-    if (bpp_alignment_load(&al, seqfile_path) != 0) {
-        fprintf(stderr, "bpp-lint: cannot read sequence file '%s'\n", seqfile_path);
-        goto out;
-    }
     size_t n_sp = 0;
-    char **species = bpp_imap_species_list(&imap, &n_sp);
+    char **species = bpp_imap_species_list(imap, &n_sp);
     if (!species || n_sp == 0) {
-        fprintf(stderr, "bpp-lint: no species found in imap '%s'\n", imapfile_path);
+        fprintf(stderr, "bpp-lint: no species found in the Imap file\n");
         free(species);
-        goto out;
+        return -1;
     }
-    if (bpp_group_by_species(&al, &imap, species, (int) n_sp, &g) != 0) {
+    if (bpp_group_by_species(al, imap, species, (int) n_sp, &g) != 0) {
         free(species);
         fprintf(stderr, "bpp-lint: failed to group sequences by species\n");
         goto out;
@@ -230,9 +151,51 @@ static int compute_priors_from_files(const char *seqfile_path,
     rc = bpp_compute_prior_means(&g, theta_mean, tau_mean);
 out:
     bpp_seq_grouping_free(&g);
+    return rc;
+}
+
+/* Compute prior means from raw data-file paths (the --template path, which
+ * has no control file to resolve against). Returns 0 on success. */
+static int compute_priors_from_files(const char *seqfile_path,
+                                     const char *imapfile_path,
+                                     double *theta_mean, double *tau_mean)
+{
+    bpp_imap_t      imap = {0};
+    bpp_alignment_t al   = {0};
+    int rc = -1;
+
+    if (bpp_imap_load(&imap, imapfile_path) != 0) {
+        fprintf(stderr, "bpp-lint: cannot read imap file '%s'\n", imapfile_path);
+        goto out;
+    }
+    if (bpp_alignment_load(&al, seqfile_path, 0) != 0) {
+        fprintf(stderr, "bpp-lint: cannot read sequence file '%s'\n", seqfile_path);
+        goto out;
+    }
+    rc = compute_priors_from_data(&al, &imap, theta_mean, tau_mean);
+out:
     bpp_alignment_free(&al);
     bpp_imap_free(&imap);
     return rc;
+}
+
+/* Report why the loaded data cannot feed the priors features (for the
+ * --suggest-priors path, which has no diagnostics list to put BPP150 in). */
+static int data_ready_for_priors(const bpp_data_t *d, const char *cfile_path) {
+    if (!d->seq.name || !d->imap.name) {
+        fprintf(stderr, "bpp-lint: priors require both 'seqfile' and 'imapfile' to be set in %s\n",
+                cfile_path);
+        return 0;
+    }
+    if (!d->seq.loaded) {
+        fprintf(stderr, "bpp-lint: cannot read sequence file '%s'\n", d->seq.abs ? d->seq.abs : d->seq.name);
+        return 0;
+    }
+    if (!d->imap.loaded) {
+        fprintf(stderr, "bpp-lint: cannot read imap file '%s'\n", d->imap.abs ? d->imap.abs : d->imap.name);
+        return 0;
+    }
+    return 1;
 }
 
 /* Parse a BPP prior value as (kind, alpha, beta). Returns 0 on success.
@@ -408,9 +371,37 @@ static const char *analysis_type_str(const bpp_file_t *f, int simulate) {
 /* Emit the full lint result as JSON matching bpp-agent-design.md §2. Every
  * value comes from the real diagnostics / parsed control file — nothing is
  * synthesized. `status` is "valid" iff there are zero error-severity items. */
+/* The `data` object: what the data-consistency pass resolved and read. NULL
+ * `d` (pass skipped: --no-data-checks or --simulate) renders as null. Paths
+ * are absolute, as the file was looked for/opened; n_loci / n_sequences
+ * (distinct '^tag' labels) come from the seqfile, species from the Imap. */
+static void emit_json_data(FILE *out, const bpp_data_t *d) {
+    fputs(",\n  \"data\": ", out);
+    if (!d) { fputs("null", out); return; }
+    fputs("{\"seqfile\": ", out);
+    if (d->seq.abs) json_print_escaped(out, d->seq.abs); else fputs("null", out);
+    fputs(", \"imapfile\": ", out);
+    if (d->imap.abs) json_print_escaped(out, d->imap.abs); else fputs("null", out);
+    if (d->seq.loaded) fprintf(out, ", \"n_loci\": %zu, \"n_sequences\": %d",
+                               d->al.n + d->al.n_extra, d->n_distinct_tags);
+    else               fputs(", \"n_loci\": null, \"n_sequences\": null", out);
+    fputs(", \"species\": ", out);
+    if (d->imap.loaded) {
+        fputc('[', out);
+        for (size_t i = 0; i < d->n_imap_species; i++) {
+            if (i) fputs(", ", out);
+            json_print_escaped(out, d->imap_species[i]);
+        }
+        fputc(']', out);
+    } else {
+        fputs("null", out);
+    }
+    fputc('}', out);
+}
+
 static void emit_json(FILE *out, const char *path, const bpp_file_t *f,
                       const bpp_diag_list_t *diags, int simulate,
-                      int check_priors)
+                      int check_priors, const bpp_data_t *data)
 {
     size_t n_err = 0, n_warn = 0, n_note = 0;
     for (size_t i = 0; i < diags->n; i++) {
@@ -483,6 +474,8 @@ static void emit_json(FILE *out, const char *path, const bpp_file_t *f,
     }
     fputs("]}", out);
 
+    emit_json_data(out, data);
+
     fprintf(out, ",\n  \"counts\": {\"errors\": %zu, \"warnings\": %zu, \"notes\": %zu}\n}\n",
             n_err, n_warn, n_note);
 }
@@ -501,7 +494,7 @@ static const char *template_field_for_flag(const char *flag) {
     static const char *fields[] = {
         "seqfile", "imapfile", "jobname", "thetaprior", "tauprior", "nloci",
         "nsample", "burnin", "sampfreq", "cleandata", "usedata", "phase",
-        "finetune", "print", "seed", "speciesmodelprior", NULL,
+        "finetune", "print", "seed", "speciesmodelprior", "speciesdelimitation", NULL,
     };
     for (int i = 0; fields[i]; i++)
         if (strcmp(n, fields[i]) == 0) return fields[i];
@@ -561,10 +554,14 @@ static int emit_template(FILE *out, const char *type,
     tpl_field(out, keys, vals, n_ov, "jobname", "out", NULL);
     fputc('\n', out);
 
-    char sds[4], sts[4];
-    snprintf(sds, sizeof sds, "%d", sd);
+    /* speciesdelimitation = 1 on its own is an "Erroneous format" abort in
+     * BPP (cfile.c:668-718 parse_speciesdelimitation needs the rjMCMC
+     * algorithm and its tuning parameter(s)); write the complete algorithm-0
+     * form with epsilon = 2, overridable with --speciesdelimitation. */
+    const char *sd_dflt = sd ? "1 0 2" : "0";
+    tpl_field(out, keys, vals, n_ov, "speciesdelimitation", sd_dflt, NULL);
+    char sts[4];
     snprintf(sts, sizeof sts, "%d", st);
-    fprintf(out, "  %14s = %s\n", "speciesdelimitation", sds);
     fprintf(out, "  %14s = %s\n", "speciestree", sts);
     if (sd || st)
         tpl_field(out, keys, vals, n_ov, "speciesmodelprior", "1", NULL);
@@ -608,6 +605,7 @@ int main(int argc, char **argv) {
     int do_suggest_priors = 0;
     int do_check_priors   = 0;
     int do_json           = 0;
+    int data_checks       = 1;   /* --no-data-checks clears */
     bpp_color_mode_t color_mode = BPP_COLOR_AUTO;
     const char *path = NULL;
     const char *template_type = NULL;   /* --template <A00|A01|A10|A11> */
@@ -647,6 +645,8 @@ int main(int argc, char **argv) {
             quiet = 1;
         } else if (strcmp(a, "--no-defaults") == 0) {
             show_defaults = 0;
+        } else if (strcmp(a, "--no-data-checks") == 0) {
+            data_checks = 0;
         } else if (strcmp(a, "--suggest-priors") == 0) {
             do_suggest_priors = 1;
         } else if (strcmp(a, "--check-priors") == 0) {
@@ -820,14 +820,15 @@ int main(int argc, char **argv) {
 
     /* --suggest-priors short-circuits the rest of the pipeline. */
     if (do_suggest_priors) {
-        char *seq_path = NULL, *imap_path = NULL;
-        if (resolve_data_paths(&file, path, &seq_path, &imap_path) != 0) {
+        bpp_data_t d = {0};
+        if (bpp_data_load(&file, path, &d) != 0 || !data_ready_for_priors(&d, path)) {
+            bpp_data_free(&d);
             bpp_file_free(&file);
             return 2;
         }
         double theta_mean = 0, tau_mean = 0;
-        int rc_sp = compute_priors_from_files(seq_path, imap_path, &theta_mean, &tau_mean);
-        free(seq_path); free(imap_path);
+        int rc_sp = compute_priors_from_data(&d.al, &d.map, &theta_mean, &tau_mean);
+        bpp_data_free(&d);
         bpp_file_free(&file);
         if (rc_sp != 0) return 2;
         printf("# data-derived prior estimates (invgamma alpha=3, mean = data estimate)\n");
@@ -842,32 +843,50 @@ int main(int argc, char **argv) {
         .show_defaults = show_defaults,
     };
     bpp_diag_list_t diags = {0};
-    int errors = bpp_lint(&file, &opts, &diags);
+    bpp_lint(&file, &opts, &diags);
 
-    if (do_check_priors) {
-        char *seq_path = NULL, *imap_path = NULL;
-        if (resolve_data_paths(&file, path, &seq_path, &imap_path) == 0) {
-            double theta_mean = 0, tau_mean = 0;
-            if (compute_priors_from_files(seq_path, imap_path,
-                                          &theta_mean, &tau_mean) == 0) {
-                /* theta: symmetric 10x threshold (both too-tight and too-diffuse). */
-                check_one_prior(&file, "thetaprior", theta_mean,
-                                "theta", "BPP110", 10.0, /*upper_only=*/0, &diags);
-                /* tau: upper-only at 10x. Only flag priors that are clearly
-                 * too diffuse against the data upper bound; the bpps max-
-                 * distance is loose by design, so a modestly wide prior with
-                 * mean at 1-5x the bound is fine. */
-                check_one_prior(&file, "tauprior",   tau_mean,
-                                "tau",   "BPP111", 10.0, /*upper_only=*/1, &diags);
-            }
+    /* Data-consistency pass (BPP150-157): open the seqfile / Imapfile the
+     * control file names and check them against it. Inference files only --
+     * in --simulate mode those files are outputs. The data is loaded once and
+     * shared with --check-priors. */
+    bpp_data_t data = {0};
+    int data_loaded = 0;
+    if (!do_simulate && (data_checks || do_check_priors)) {
+        if (bpp_data_load(&file, path, &data) != 0) {
+            fprintf(stderr, "%s: out of memory\n", argv[0]);
+            bpp_data_free(&data);
+            bpp_diag_list_free(&diags);
+            bpp_file_free(&file);
+            return 2;
         }
-        free(seq_path); free(imap_path);
+        data_loaded = 1;
+        if (data_checks) bpp_data_check(&file, &data, &diags);
     }
 
-    int rc = (errors > 0) ? 1 : 0;
+    if (do_check_priors && data_loaded && data.seq.loaded && data.imap.loaded) {
+        double theta_mean = 0, tau_mean = 0;
+        if (compute_priors_from_data(&data.al, &data.map, &theta_mean, &tau_mean) == 0) {
+            /* theta: symmetric 10x threshold (both too-tight and too-diffuse). */
+            check_one_prior(&file, "thetaprior", theta_mean,
+                            "theta", "BPP110", 10.0, /*upper_only=*/0, &diags);
+            /* tau: upper-only at 10x. Only flag priors that are clearly
+             * too diffuse against the data upper bound; the bpps max-
+             * distance is loose by design, so a modestly wide prior with
+             * mean at 1-5x the bound is fine. */
+            check_one_prior(&file, "tauprior",   tau_mean,
+                            "tau",   "BPP111", 10.0, /*upper_only=*/1, &diags);
+        }
+    }
+
+    /* Exit status follows the diagnostics themselves: any error-severity item
+     * (from any pass) means exit 1, exactly as --json's status == "invalid". */
+    int rc = 0;
+    for (size_t i = 0; i < diags.n; i++)
+        if (diags.items[i].severity == SEV_ERROR) { rc = 1; break; }
 
     if (do_json) {
-        emit_json(stdout, path, &file, &diags, do_simulate, do_check_priors);
+        emit_json(stdout, path, &file, &diags, do_simulate, do_check_priors,
+                  (data_loaded && data_checks) ? &data : NULL);
         goto done;
     }
 
@@ -928,6 +947,7 @@ int main(int argc, char **argv) {
     }
 
 done:
+    if (data_loaded) bpp_data_free(&data);
     bpp_diag_list_free(&diags);
     bpp_file_free(&file);
     return rc;

@@ -59,6 +59,7 @@ static long lr_getline(line_reader_t *r) {
         r->buf = malloc(1);
         r->cap = 1;
     }
+    if (used > 0 && r->buf[used - 1] == '\r') used--;   /* CRLF files */
     r->buf[used] = '\0';
     return (long) used;
 }
@@ -76,7 +77,35 @@ static int al_reserve(bpp_alignment_t *al, size_t need) {
     return 0;
 }
 
-/* ---------- main parser ---------- */
+/* ---------- main parser ----------
+ *
+ * Mirrors BPP's phylip_parse_sequential / phylip_parse_multisequential
+ * (bpp-4.8.7 phylip.c:386-680): a locus is a header '<nseqs> <length>' (and
+ * nothing else on the line), then nseqs sequences. A sequence starts on a
+ * non-blank line with its label (up to the first space or tab), and its data
+ * continues on that line and as many following lines as needed until exactly
+ * `length` legal characters have been read; blank lines inside are skipped.
+ * Characters are classified like pll_map_fasta (maps.c:173): letters, digits,
+ * '-' and '?' are sequence data; '.' and control characters are fatal;
+ * everything else (spaces, punctuation) is stripped. Loci are separated by
+ * any number of blank lines. */
+
+static void locus_free(bpp_locus_t *L) {
+    if (!L->seqs) return;
+    for (int j = 0; j < L->nseqs; j++) {
+        free(L->seqs[j].name);
+        free(L->seqs[j].seq);
+    }
+    free(L->seqs);
+    L->seqs = NULL;
+    L->nseqs = 0;
+}
+
+static char last_error[256];
+
+const char *bpp_alignment_last_error(void) { return last_error; }
+
+#define set_error(...) snprintf(last_error, sizeof last_error, __VA_ARGS__)
 
 static int is_blank(const char *s) {
     while (*s) {
@@ -84,6 +113,16 @@ static int is_blank(const char *s) {
         s++;
     }
     return 1;
+}
+
+/* pll_map_fasta classes: 1 legal, 2 fatal, 0 stripped. */
+static int seqchar_class(unsigned char c) {
+    if (c < 0x20) return (c >= 9 && c <= 13) ? 0 : 2;
+    if (c == '.') return 2;
+    if (c == '-' || c == '?') return 1;
+    if (isdigit(c)) return 1;
+    if (isalpha(c)) return (c == 'j' || c == 'o') ? 0 : 1;
+    return 0;
 }
 
 /* Try to parse a line as a locus header "<nseqs> <length>". Returns 1 if
@@ -117,94 +156,134 @@ static char *strip_caret(const char *label) {
     return bpp_strdup(start);
 }
 
-int bpp_alignment_load(bpp_alignment_t *al, const char *path) {
+/* Append the legal characters of `p` to seq (capacity `len`+1, `*got` filled
+ * so far). Returns 0, or -1 on a fatal character / overlong sequence. */
+static int consume_seqchars(const char *p, char *seq, int len, int *got,
+                            long lineno, const char *label) {
+    for (; *p; p++) {
+        int cls = seqchar_class((unsigned char) *p);
+        if (cls == 0) continue;
+        if (cls == 2) {
+            set_error("illegal character '%c' in sequence '%s' (line %ld)",
+                      *p, label, lineno);
+            return -1;
+        }
+        if (*got >= len) {
+            set_error("sequence '%s' is longer than the declared length %d (line %ld)",
+                      label, len, lineno);
+            return -1;
+        }
+        seq[(*got)++] = *p;
+    }
+    return 0;
+}
+
+int bpp_alignment_load(bpp_alignment_t *al, const char *path, int max_loci) {
     al->loci = NULL;
     al->n = al->cap = 0;
+    al->n_extra = 0;
+    al->trailing_unparsed = 0;
+    last_error[0] = '\0';
+    bpp_locus_t scratch = {0};   /* receives loci beyond max_loci */
 
     line_reader_t r;
-    if (lr_open(&r, path) != 0) return -1;
+    if (lr_open(&r, path) != 0) {
+        snprintf(last_error, sizeof last_error, "cannot open");
+        return -1;
+    }
+    long lineno = 0;
+    long len;
+    int have_line = 0;   /* r.buf holds an unconsumed line */
+
+#define NEXT_LINE() (have_line ? (have_line = 0, (long) strlen(r.buf)) \
+                                : ((len = lr_getline(&r)) >= 0 ? (lineno++, len) : -1))
+    /* Beyond max_loci a problem is not an error (BPP stops reading at nloci):
+     * note it and stop. Within the stored loci it is fatal. */
+#define FAIL() do { \
+        if (extra_mode) { al->trailing_unparsed = 1; locus_free(&scratch); goto done; } \
+        lr_close(&r); bpp_alignment_free(al); return -1; } while (0)
 
     while (1) {
+        int extra_mode = max_loci > 0 && al->n >= (size_t) max_loci;
+
         /* skip blanks until a header */
-        int ns = 0, ln_ = 0;
-        int found = 0;
-        while (1) {
-            long len = lr_getline(&r);
-            if (len < 0) { goto done; }
+        int ns = 0, ln_ = 0, found = 0;
+        while (NEXT_LINE() >= 0) {
             if (is_blank(r.buf)) continue;
             if (parse_header(r.buf, &ns, &ln_)) { found = 1; break; }
-            /* Found a non-blank, non-header line outside of a locus -> error */
-            lr_close(&r);
-            bpp_alignment_free(al);
-            return -1;
+            set_error("expected a locus header '<nseqs> <length>' at line %ld, got '%.60s'",
+                      lineno, r.buf);
+            FAIL();
         }
         if (!found) break;
 
-        if (al_reserve(al, 1) != 0) { lr_close(&r); bpp_alignment_free(al); return -1; }
-        bpp_locus_t *L = &al->loci[al->n++];
+        bpp_locus_t *L;
+        if (extra_mode) {
+            L = &scratch;
+        } else {
+            if (al_reserve(al, 1) != 0) FAIL();
+            L = &al->loci[al->n++];
+        }
         L->nseqs  = ns;
         L->length = ln_;
         L->seqs   = calloc((size_t) ns, sizeof(bpp_seq_t));
-        if (!L->seqs) { lr_close(&r); bpp_alignment_free(al); return -1; }
+        if (!L->seqs) FAIL();
 
-        int got = 0;
-        while (got < ns) {
-            long llen = lr_getline(&r);
-            if (llen < 0) {
-                lr_close(&r); bpp_alignment_free(al); return -1;
+        for (int got_seqs = 0; got_seqs < ns; got_seqs++) {
+            /* label line: first non-blank line */
+            long l;
+            while ((l = NEXT_LINE()) >= 0 && is_blank(r.buf)) ;
+            if (l < 0) {
+                set_error("locus %zu: found %d sequence(s) but expected %d",
+                          al->n, got_seqs, ns);
+                FAIL();
             }
-            if (is_blank(r.buf)) continue;
-            /* Parse "<label> <sequence>" — split on first whitespace. */
             const char *p = r.buf;
             while (*p && isspace((unsigned char) *p)) p++;
             const char *lbls = p;
-            while (*p && !isspace((unsigned char) *p)) p++;
+            while (*p && *p != ' ' && *p != '\t') p++;
             size_t lblen = (size_t)(p - lbls);
-            while (*p && isspace((unsigned char) *p)) p++;
-            const char *seqs = p;
-            /* sequence may have embedded spaces (PHYLIP interleaved style);
-             * compact by stripping all whitespace. */
-            size_t seqcap = (size_t) ln_ + 8;
-            char *seq = malloc(seqcap);
-            if (!seq) { lr_close(&r); bpp_alignment_free(al); return -1; }
-            size_t sw = 0;
-            for (const char *q = seqs; *q; q++) {
-                if (isspace((unsigned char) *q)) continue;
-                if (sw + 1 >= seqcap) {
-                    seqcap *= 2;
-                    char *np = realloc(seq, seqcap);
-                    if (!np) { free(seq); lr_close(&r); bpp_alignment_free(al); return -1; }
-                    seq = np;
-                }
-                seq[sw++] = *q;
-            }
-            seq[sw] = '\0';
-
             char *label = malloc(lblen + 1);
-            if (!label) { free(seq); lr_close(&r); bpp_alignment_free(al); return -1; }
+            if (!label) FAIL();
             memcpy(label, lbls, lblen);
             label[lblen] = '\0';
 
-            L->seqs[got].name = strip_caret(label);
+            char *seq = malloc((size_t) ln_ + 1);
+            if (!seq) { free(label); FAIL(); }
+            int got = 0;
+            if (consume_seqchars(p, seq, ln_, &got, lineno, label) != 0) {
+                free(label); free(seq); FAIL();
+            }
+            /* continuation lines until the declared length is reached */
+            while (got < ln_) {
+                if (NEXT_LINE() < 0) {
+                    set_error("sequence '%s' has %d characters but expected %d",
+                              label, got, ln_);
+                    free(label); free(seq); FAIL();
+                }
+                if (consume_seqchars(r.buf, seq, ln_, &got, lineno, label) != 0) {
+                    free(label); free(seq); FAIL();
+                }
+            }
+            seq[got] = '\0';
+
+            L->seqs[got_seqs].name    = strip_caret(label);
+            L->seqs[got_seqs].has_tag = strchr(label, '^') != NULL;
+            L->seqs[got_seqs].seq     = seq;
             free(label);
-            L->seqs[got].seq  = seq;
-            got++;
         }
+        if (extra_mode) { al->n_extra++; locus_free(&scratch); }
     }
 done:
+#undef NEXT_LINE
+#undef FAIL
     lr_close(&r);
     return 0;
 }
 
 void bpp_alignment_free(bpp_alignment_t *al) {
     if (!al) return;
-    for (size_t i = 0; i < al->n; i++) {
-        for (int j = 0; j < al->loci[i].nseqs; j++) {
-            free(al->loci[i].seqs[j].name);
-            free(al->loci[i].seqs[j].seq);
-        }
-        free(al->loci[i].seqs);
-    }
+    for (size_t i = 0; i < al->n; i++) locus_free(&al->loci[i]);
     free(al->loci);
     al->loci = NULL;
     al->n = al->cap = 0;

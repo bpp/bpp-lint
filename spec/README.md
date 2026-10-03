@@ -83,13 +83,33 @@ the spec.
 into a flat list of typed slots (`kw_slot_t`) emitted into `keywords_gen.c`, and
 lint.c's `check_value_generic()` walks a value's tokens against them. The
 grammar atoms map to slot types (`b`→bool, `d`→int, `+d`→uint, `f`→float,
-`s`→string); `[x]` marks trailing optional slots, `x*` a trailing repetition,
-`(0|1)` a bounded leading slot; `enum`/`values`/`range`/`constraints` become
-enum lists and numeric bounds. Grammars that need real parsing (top-level
-alternation with differing arities, Newick trees, multi-line blocks) or that
-have a bespoke check in lint.c (`print`, `thetaprior`, `tauprior`, `phiprior`,
-`finetune`, `locusrate`, `clock`) compile to no slots and are skipped by the
-generic checker. Of the 49 live keywords, 38 currently carry a slot profile.
+`s`→string); `[x]` marks trailing optional slots, `x*` a trailing repetition;
+an integer literal (`0`, `1`) or a literal choice (`(2|3)`) is a *discriminator*
+slot, a word choice (`(dir|iid)`) an enum string slot; `enum`/`values`/`range`/
+`constraints` become enum lists and numeric bounds.
+
+A top-level alternation `A | B | C` compiles to several slot lists, one per
+alternative, each led by its literal discriminators. This expresses keywords
+whose arity depends on an earlier value, e.g.
+
+```
+speciesdelimitation:  0 | 1 0 f | 1 1 f f
+clock:                1 | (2|3) f f f [(dir|iid) (G|LN)] | 4 f
+locusrate:            0 | 1 f f f [(dir|iid)] | 2 s | 3 f f
+heredity:             0 | 1 f f | 2 s
+```
+
+The checker selects the alternative whose discriminators match the value's
+leading tokens and validates arity and types against that form only (BPP017
+with the form named; BPP019 when no form matches). Two optional companions:
+`forms` gives a human-readable rendering of each alternative (same order) for
+messages, and `suggest` a complete recommended value offered as the fix (an
+auto-fix is attached only when the value consists of the switch alone).
+
+Grammars that need real parsing (Newick trees, multi-line blocks) or that have
+a bespoke check in lint.c (`print`, `thetaprior`, `tauprior`, `phiprior`,
+`finetune`) compile to no slots and are skipped by the generic checker. Of the
+49 live keywords, 41 currently carry a slot profile.
 
 ## Keyword record shape
 

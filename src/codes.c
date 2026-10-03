@@ -376,6 +376,93 @@ static const bpp_code_doc_t codes[] = {
       "migration block. The repeat is redundant (and its rate parameters are\n"
       "ambiguous); keep a single row per directed connection." },
 
+    /* 15x: data consistency (the control file vs the seqfile / Imapfile it
+     * names). Each mirrors a fatal() that BPP 4.8.7 raises only after the
+     * control file has parsed cleanly; the BPP message is quoted so it can be
+     * searched for. Skipped with --no-data-checks and in --simulate mode. */
+    { "150",
+      "seqfile or Imapfile cannot be opened (or is not parseable).",
+      "The control file names a data file that bpp-lint could not open: it\n"
+      "looked next to the control file and, if that differs, relative to the\n"
+      "current directory. BPP aborts at startup with\n"
+      "    Unable to open file (<name>)\n"
+      "BPP opens the seqfile even with usedata = 0, and the Imapfile whenever\n"
+      "species&tree declares more than one species. Also reported when the file\n"
+      "opens but is not in the expected format (a BPP/PHYLIP sequence file:\n"
+      "'<nseqs> <length>' locus headers followed by '^tag sequence' lines; an\n"
+      "Imap: '<individual> <species>' per line)." },
+
+    { "151",
+      "relative data path resolves differently from the control file's directory than from the cwd.",
+      "BPP opens seqfile and Imapfile relative to the directory it is RUN FROM,\n"
+      "not relative to the control file. bpp-lint resolves them against the\n"
+      "control file's directory (friendlier for editors), and warns when the\n"
+      "two resolutions point to different places, saying which one exists and\n"
+      "which one BPP will use. A file that exists only next to the control\n"
+      "file makes BPP abort with 'Unable to open file (<name>)' unless bpp is\n"
+      "run from that directory. Fix: run bpp from the control file's directory,\n"
+      "or write the path relative to where bpp will run." },
+
+    { "152",
+      "nloci does not match the number of loci in the seqfile.",
+      "Error when nloci is LARGER than the number of loci in the seqfile: BPP\n"
+      "aborts after reading the alignment with\n"
+      "    Expected <nloci> loci but found only <n>\n"
+      "(method.c). Informational when nloci is smaller: BPP then uses only the\n"
+      "first nloci loci and ignores the rest, which may or may not be what you\n"
+      "intend. nloci = 0 means 'all loci in the file'." },
+
+    { "153",
+      "a sequence tag in the seqfile has no Imap entry.",
+      "With more than one species, every sequence label carries a '^tag' and\n"
+      "BPP looks the tag up in the Imap to find its species. A tag with no Imap\n"
+      "line makes BPP abort with\n"
+      "    Cannot find a mapping to species for tag <tag> inside file <imap>\n"
+      "(stree.c). The message lists the first few missing tags and the total.\n"
+      "Matching is exact and case-sensitive. Add an '<individual> <species>'\n"
+      "line for each tag, or fix the label." },
+
+    { "154",
+      "Imap species set does not match the species&tree names.",
+      "Error: an Imap line maps an individual to a species that is not one of\n"
+      "the species&tree names. BPP aborts with\n"
+      "    Cannot find node with population label <species>\n"
+      "(mapping.c). Names must match exactly (case-sensitive) between the Imap,\n"
+      "the species&tree header and the Newick tree.\n"
+      "Warning: a species&tree name that no Imap individual maps to. BPP runs\n"
+      "(confirmed against 4.8.7) but that population has no sequence data,\n"
+      "which is almost always a misspelt name in one file or the other." },
+
+    { "155",
+      "number of phase digits does not match the number of species.",
+      "The 'phase' line needs exactly one 0/1 per species, in species&tree\n"
+      "header order. When any digit is 1 and the count is wrong, BPP aborts with\n"
+      "    Number of digits in 'phase' does not match number of species\n"
+      "(cfile.c update_sp_seqcount). When every digit is 0 BPP discards the\n"
+      "phase line before counting (parse_diploid frees an all-zero vector), so\n"
+      "the mismatch is harmless and reported as a warning -- until someone\n"
+      "changes a 0 to a 1. This check needs no data files and always runs." },
+
+    { "156",
+      "species&tree per-species counts differ from the Imap individuals (info).",
+      "The second line of the species&tree block gives a per-species number of\n"
+      "sequences. Inference parses these counts but does not use them -- the\n"
+      "actual sequences come from the seqfile via the Imap -- so a mismatch\n"
+      "with the number of distinct Imap individuals per species is reported as\n"
+      "a note only. BPP --simulate is the mode that uses the counts (as the\n"
+      "number of sequences to simulate per species); there the Imap is an\n"
+      "output, so no comparison is possible." },
+
+    { "157",
+      "a sequence label in the seqfile has no '^' species tag.",
+      "With more than one species, BPP locates each sequence's individual by\n"
+      "the text after '^' in its label ('<anything>^<individual>'). A label\n"
+      "without '^' makes BPP abort with\n"
+      "    Cannot find species tag on sequence <label> of locus <n>\n"
+      "(stree.c). Single-species analyses do not need the tag. Rename the\n"
+      "sequences so each label ends in '^<individual>' with <individual> an\n"
+      "Imap entry." },
+
     { "111",
       "tauprior is far too diffuse vs the data upper bound (--check-priors).",
       "Triggered when --check-priors is passed and the existing tauprior's\n"

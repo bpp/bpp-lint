@@ -67,6 +67,33 @@ Codes are grouped:
 | `1xx` | Completeness and context                         |
 | `11x` | Prior sanity (`--check-priors`)                  |
 | `12x` | Cross-keyword consistency (mirrors `check_validity()` in `cfile.c`) |
+| `13x` | `species&tree` block: header, counts, Newick                        |
+| `14x` | `migration` (MSC-M) block                                         |
+| `15x` | Data consistency: the control file vs the `seqfile` / `Imapfile` it names (see below) |
+
+### Data-consistency checks (`15x`)
+
+By default bpp-lint opens the `seqfile` and `Imapfile` named in an inference
+control file and checks them against it. Each check mirrors an abort that BPP
+raises only *after* the control file has parsed, so a syntactically valid file
+can still be refused by BPP. `--explain` quotes the BPP message each code
+prevents.
+
+| Code  | Severity          | Condition                                                        | BPP message prevented |
+|-------|-------------------|------------------------------------------------------------------|-----------------------|
+| `150` | error             | `seqfile` / `Imapfile` cannot be opened (or parsed)              | `Unable to open file (...)` |
+| `151` | warning           | a relative data path resolves differently from the control file's directory than from the current directory (BPP uses the latter) | `Unable to open file (...)` when run elsewhere |
+| `152` | error / info      | `nloci` larger than the loci in the seqfile / smaller (BPP uses the first `nloci`) | `Expected N loci but found only M` |
+| `153` | error             | a `^tag` in the seqfile has no Imap entry                        | `Cannot find a mapping to species for tag ...` |
+| `154` | error / warning   | an Imap species is not in `species&tree` / a tree species has no Imap individuals (BPP runs) | `Cannot find node with population label ...` |
+| `155` | error / warning   | `phase` digit count ≠ species count; warning when all digits are 0 (BPP discards the line) | `Number of digits in 'phase' does not match number of species` |
+| `156` | info              | per-species counts in `species&tree` differ from the Imap individuals (inference ignores the counts) | — |
+| `157` | error             | a sequence label has no `^` species tag (multi-species runs)     | `Cannot find species tag on sequence ...` |
+
+Paths are resolved relative to the control file's directory (friendlier for
+editors); BPP resolves them relative to the directory it is run from, and
+`151` warns whenever that makes a difference. `--no-data-checks` turns the pass
+off; it never runs for `--simulate` files, where those files are outputs.
 
 ### JSON output
 
@@ -83,6 +110,25 @@ It carries top-level `status` (`"valid"` / `"invalid"`), `counts`, and a
 "using default" notices — a structured `default` `{keyword, value}`. Consumers
 typically use `status == "valid"` as a stop condition. `--json` cannot be
 combined with `--fix`, `--diff`, or `--suggest-priors`.
+
+A top-level `data` object reports what the data-consistency pass resolved and
+read (`null` when the pass did not run: `--no-data-checks` or `--simulate`):
+
+```json
+"data": {
+  "seqfile": "/abs/path/tiny.txt",
+  "imapfile": "/abs/path/tiny.imap",
+  "n_loci": 2,
+  "n_sequences": 6,
+  "species": ["A", "B", "C"]
+}
+```
+
+Paths are absolute, as the files were looked for. `n_loci` and `n_sequences`
+(the number of distinct `^tag` labels) come from the seqfile, `species` from
+the Imap; each is `null` when the corresponding file could not be read. The
+exit status follows the diagnostics: any error-severity item exits 1, exactly
+when `status` is `"invalid"`.
 
 ### Applying fixes
 
@@ -125,6 +171,7 @@ implementation for the underlying calculation.
 | `-s, --simulate`  | Lint as a BPP `--simulate` control file (different keyword set)   |
 | `-q, --quiet`     | Suppress warnings and notes; errors only                          |
 | `--no-defaults`   | Suppress `[103]` notes about keywords falling back to default     |
+| `--no-data-checks`| Skip the `15x` data-consistency pass (do not open `seqfile` / `Imapfile`) |
 | `--color=WHEN`    | `auto` (default), `always`, or `never`                            |
 | `--version`       | Print version and exit                                            |
 | `-h, --help`      | Full help                                                         |
@@ -134,7 +181,8 @@ implementation for the underlying calculation.
 The `examples/` directory contains three fixtures:
 
 - `modern-4x.bpp.ctl` — clean BPP 4.x file; only `[103]` default-value
-  notes when linted.
+  notes when linted (plus `[150]`, since its `frogs.txt` data files are not
+  in the repo; pass `--no-data-checks` to see the syntax result alone).
 - `legacy-3x.bpp.ctl` — BPP 3.x file demonstrating the rename,
   removal, and value-format diagnostics. Try `--diff` to see the
   auto-rewrite.

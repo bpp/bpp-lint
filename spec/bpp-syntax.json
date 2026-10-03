@@ -354,8 +354,13 @@
         "4.8.7"
       ],
       "value": {
-        "grammar": "+d [f f f s s]",
-        "detail": "clock id (1=strict/global, 2/3=relaxed); relaxed clocks add rate-prior parameters. See parse_clock."
+        "grammar": "1 | (2|3) f f f [(dir|iid) (G|LN)] | 4 f",
+        "forms": [
+          "1",
+          "2|3 a_vbar b_vbar a_vi [dir|iid [G|LN]]",
+          "4 alpha"
+        ],
+        "detail": "clock id (1=strict/global, 2=independent-rates relaxed, 3=correlated-rates relaxed, 4=simple); 2/3 take exactly three rate-prior parameters plus an optional locus-rate prior (dir|iid) and branch-rate distribution (G|LN); 4 takes one. Arity depends on the clock id (cfile.c parse_clock, 814-949)."
       },
       "default": 1,
       "required": "optional",
@@ -570,8 +575,13 @@
         "4.8.7"
       ],
       "value": {
-        "grammar": "+d [(f f, s)]",
-        "detail": "0=none; 1=estimate with a gamma prior (alpha beta); or a filename of fixed per-locus heredity multipliers. See parse_heredity."
+        "grammar": "0 | 1 f f | 2 s",
+        "forms": [
+          "0",
+          "1 alpha beta",
+          "2 <heredityfile>"
+        ],
+        "detail": "0=none; 1=estimate with a gamma prior (exactly two params: alpha beta); 2=a file of fixed per-locus heredity multipliers. Arity depends on the first value (cfile.c parse_heredity, 1782-1823)."
       },
       "default": 0,
       "required": "optional",
@@ -722,8 +732,14 @@
         "4.8.7"
       ],
       "value": {
-        "grammar": "+d [(f f f s, s)]",
-        "detail": "0=none; 1=estimate with a gamma/dirichlet prior (mubar params + prior keyword); or a filename of fixed per-locus rates. See parse_locusrate."
+        "grammar": "0 | 1 f f f [(dir|iid)] | 2 s | 3 f f",
+        "forms": [
+          "0",
+          "1 a_mubar b_mubar a_mui [dir|iid]",
+          "2 <ratefile>",
+          "3 a_mubar b_mubar"
+        ],
+        "detail": "0=constant; 1=estimate with a gamma/dirichlet prior (three mubar/mui params + optional prior keyword dir|iid); 2=a file of fixed per-locus rates; 3=mutation-rate-only (two gamma params, used with tip dating). Arity depends on the first value (cfile.c parse_locusrate, 951-1088)."
       },
       "default": 0,
       "required": "optional",
@@ -1430,8 +1446,14 @@
         "4.8.7"
       ],
       "value": {
-        "grammar": "b [d f f]",
-        "notes": "est (0/1); if 1: rjMCMC algorithm (0 or 1) then its finetune params -- algorithm 0 takes one (epsilon): '1 0 e'; algorithm 1 takes two (alpha m): '1 1 a m'"
+        "grammar": "0 | 1 0 f | 1 1 f f",
+        "forms": [
+          "0",
+          "1 0 epsilon",
+          "1 1 alpha m"
+        ],
+        "suggest": "1 0 2",
+        "notes": "est (0/1); if 1: rjMCMC algorithm (0 or 1) then its finetune params -- algorithm 0 takes exactly one (epsilon): '1 0 e'; algorithm 1 takes exactly two (alpha m): '1 1 a m'. Arity depends on the algorithm (cfile.c parse_speciesdelimitation, 668-718); a bare '1' or '1 0' is an 'Erroneous format' abort. Reasonable epsilon values are 1, 2 or 5 (manual)."
       },
       "default": 0,
       "required": "optional",

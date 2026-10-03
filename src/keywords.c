@@ -54,10 +54,16 @@ const bpp_keyword_t *bpp_keyword_suggest(const char *name, kw_mode_t mode, int m
     return (best_d <= max_distance) ? best : NULL;
 }
 
-const kw_slot_t *bpp_keyword_slots(const char *name) {
+const kw_valuespec_t *bpp_keyword_valuespec(const char *name) {
     if (!name) return NULL;
     for (int i = 0; kw_value_table[i].name; i++) {
-        if (bpp_strieq(kw_value_table[i].name, name)) return kw_value_table[i].slots;
+        if (bpp_strieq(kw_value_table[i].name, name)) return &kw_value_table[i];
     }
     return NULL;
+}
+
+const kw_slot_t *bpp_keyword_slots(const char *name) {
+    const kw_valuespec_t *v = bpp_keyword_valuespec(name);
+    if (!v || !v->alts || !v->alts[0] || v->alts[1]) return NULL;
+    return v->alts[0];
 }

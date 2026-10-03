@@ -65,19 +65,34 @@ typedef struct {
     unsigned     has_min  : 1;
     unsigned     has_max  : 1;
     unsigned     min_excl : 1;   /* bound is exclusive: value > min (else >=) */
+    unsigned     literal  : 1;   /* discriminator: an integer literal (or a
+                                  * literal choice like (2|3)) that selects
+                                  * this alternative; bounds hold the value(s) */
     double       min;
     double       max;
     const char  *const *enums;   /* NULL, else NULL-terminated allowed strings */
     const char  *label;          /* parameter name for messages, or NULL */
 } kw_slot_t;
 
+/* A keyword's value profile: one or more alternative forms. A grammar with
+ * top-level alternation ("0 | 1 0 f | 1 1 f f") compiles to several slot
+ * lists, each beginning with literal discriminator slots; the checker picks
+ * the alternative whose discriminators match the value's leading tokens and
+ * validates arity/types against that one only. Plain grammars have a single
+ * alternative. */
 typedef struct {
-    const char      *name;    /* lowercase keyword */
-    const kw_slot_t *slots;   /* VT_END-terminated slot list */
+    const char              *name;     /* lowercase keyword */
+    const kw_slot_t *const  *alts;     /* NULL-terminated list of VT_END-terminated slot lists */
+    const char *const       *forms;    /* human-readable rendering of each alt (same order), or NULL */
+    const char              *suggest;  /* a complete recommended value to offer as the fix, or NULL */
 } kw_valuespec_t;
 
-/* Return the VT_END-terminated slot list describing `name`'s value, or NULL if
- * the keyword has no generic value profile (unknown, bespoke, or irreducible). */
+/* Return the value profile for `name`, or NULL if the keyword has no generic
+ * value profile (unknown, bespoke, or irreducible). */
+const kw_valuespec_t *bpp_keyword_valuespec(const char *name);
+
+/* Return the VT_END-terminated slot list describing `name`'s value when it has
+ * exactly one form, or NULL (no profile, or several alternative forms). */
 const kw_slot_t *bpp_keyword_slots(const char *name);
 
 #endif

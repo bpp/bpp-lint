@@ -92,91 +92,157 @@ const bpp_keyword_t kw_table[] = {
 
 /* ===== Value grammars: typed slot lists compiled from
  * spec value.grammar, walked by lint.c's generic value checker.
- * 38 of 49 live keywords have a
- * reducible grammar; the rest (alternation / Newick / multi-line /
- * bespoke-checked) are validated elsewhere or not at all. ===== */
+ * 41 of 49 live keywords have a
+ * reducible grammar; the rest (Newick / multi-line / bespoke-checked)
+ * are validated elsewhere or not at all.
+ * 4 keyword(s) have several alternative forms discriminated by
+ * leading literal values (e.g. speciesdelimitation: '0' | '1 0 e' |
+ * '1 1 a m'); the checker validates arity against the matching form. ===== */
 
 static const kw_slot_t slots_alphaprior[] = { { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_UINT, .optional = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_alphaprior[] = { slots_alphaprior, NULL };
 static const char *const enum_arch[] = { "cpu", "sse", "avx", "avx2", "neon", NULL };
 static const kw_slot_t slots_arch[] = { { .type = VT_STRING, .enums = enum_arch }, { .type = VT_END } };
-static const kw_slot_t slots_basefreqs[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .has_max = 1, .max = 1 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_arch[] = { slots_arch, NULL };
+static const kw_slot_t slots_basefreqs[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .literal = 1, .has_max = 1, .max = 1 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_basefreqs[] = { slots_basefreqs, NULL };
 static const kw_slot_t slots_bayesfactorbeta[] = { { .type = VT_FLOAT, .has_min = 1, .min = 0, .min_excl = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_bayesfactorbeta[] = { slots_bayesfactorbeta, NULL };
 static const kw_slot_t slots_burnin[] = { { .type = VT_UINT }, { .type = VT_END } };
+static const kw_slot_t *const alts_burnin[] = { slots_burnin, NULL };
 static const kw_slot_t slots_checkpoint[] = { { .type = VT_UINT }, { .type = VT_UINT, .optional = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_checkpoint[] = { slots_checkpoint, NULL };
 static const kw_slot_t slots_cleandata[] = { { .type = VT_BOOL }, { .type = VT_END } };
+static const kw_slot_t *const alts_cleandata[] = { slots_cleandata, NULL };
+static const kw_slot_t slots_clock_0[] = { { .type = VT_UINT, .has_min = 1, .min = 1, .literal = 1, .has_max = 1, .max = 1 }, { .type = VT_END } };
+static const char *const enum_clock[] = { "dir", "iid", NULL };
+static const char *const enum_clock_1[] = { "G", "LN", NULL };
+static const kw_slot_t slots_clock_1[] = { { .type = VT_UINT, .has_min = 1, .min = 2, .literal = 1, .has_max = 1, .max = 3 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_STRING, .optional = 1, .enums = enum_clock }, { .type = VT_STRING, .optional = 1, .enums = enum_clock_1 }, { .type = VT_END } };
+static const kw_slot_t slots_clock_2[] = { { .type = VT_UINT, .has_min = 1, .min = 4, .literal = 1, .has_max = 1, .max = 4 }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_clock[] = { slots_clock_0, slots_clock_1, slots_clock_2, NULL };
+static const char *const forms_clock[] = { "1", "2|3 a_vbar b_vbar a_vi [dir|iid [G|LN]]", "4 alpha", NULL };
 static const kw_slot_t slots_concatfile[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_concatfile[] = { slots_concatfile, NULL };
 static const kw_slot_t slots_constraintfile[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_constraintfile[] = { slots_constraintfile, NULL };
 static const kw_slot_t slots_datefile[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_datefile[] = { slots_datefile, NULL };
 static const kw_slot_t slots_debug_migration[] = { { .type = VT_UINT }, { .type = VT_END } };
+static const kw_slot_t *const alts_debug_migration[] = { slots_debug_migration, NULL };
 static const kw_slot_t slots_geneflow[] = { { .type = VT_BOOL }, { .type = VT_END } };
+static const kw_slot_t *const alts_geneflow[] = { slots_geneflow, NULL };
+static const kw_slot_t slots_heredity_0[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .literal = 1, .has_max = 1, .max = 0 }, { .type = VT_END } };
+static const kw_slot_t slots_heredity_1[] = { { .type = VT_UINT, .has_min = 1, .min = 1, .literal = 1, .has_max = 1, .max = 1 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t slots_heredity_2[] = { { .type = VT_UINT, .has_min = 1, .min = 2, .literal = 1, .has_max = 1, .max = 2 }, { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_heredity[] = { slots_heredity_0, slots_heredity_1, slots_heredity_2, NULL };
+static const char *const forms_heredity[] = { "0", "1 alpha beta", "2 <heredityfile>", NULL };
 static const kw_slot_t slots_imapfile[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_imapfile[] = { slots_imapfile, NULL };
 static const kw_slot_t slots_jobname[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_jobname[] = { slots_jobname, NULL };
 static const char *const enum_loadbalance[] = { "zigzag", "none", NULL };
 static const kw_slot_t slots_loadbalance[] = { { .type = VT_STRING, .enums = enum_loadbalance }, { .type = VT_END } };
+static const kw_slot_t *const alts_loadbalance[] = { slots_loadbalance, NULL };
 static const kw_slot_t slots_loci_length[] = { { .type = VT_UINT, .has_min = 1, .min = 1 }, { .type = VT_UINT, .has_min = 1, .min = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_loci_length[] = { slots_loci_length, NULL };
+static const kw_slot_t slots_locusrate_0[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .literal = 1, .has_max = 1, .max = 0 }, { .type = VT_END } };
+static const char *const enum_locusrate[] = { "dir", "iid", NULL };
+static const kw_slot_t slots_locusrate_1[] = { { .type = VT_UINT, .has_min = 1, .min = 1, .literal = 1, .has_max = 1, .max = 1 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_STRING, .optional = 1, .enums = enum_locusrate }, { .type = VT_END } };
+static const kw_slot_t slots_locusrate_2[] = { { .type = VT_UINT, .has_min = 1, .min = 2, .literal = 1, .has_max = 1, .max = 2 }, { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t slots_locusrate_3[] = { { .type = VT_UINT, .has_min = 1, .min = 3, .literal = 1, .has_max = 1, .max = 3 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_locusrate[] = { slots_locusrate_0, slots_locusrate_1, slots_locusrate_2, slots_locusrate_3, NULL };
+static const char *const forms_locusrate[] = { "0", "1 a_mubar b_mubar a_mui [dir|iid]", "2 <ratefile>", "3 a_mubar b_mubar", NULL };
 static const char *const enum_model[] = { "JC69", "K80", "F81", "HKY", "T92", "TN93", "F84", "GTR", "DAYHOFF", "LG", "DCMUT", "JTT", "MTREV", "WAG", "RTREV", "CPREV", "VT", "BLOSUM62", "MTMAM", "MTART", "MTZOA", "PMB", "HIVB", "HIVW", "JTTDCMUT", "FLU", "STMTREV", "Custom", NULL };
 static const kw_slot_t slots_model[] = { { .type = VT_STRING, .enums = enum_model }, { .type = VT_STRING, .optional = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_model[] = { slots_model, NULL };
 static const kw_slot_t slots_modelparafile[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_modelparafile[] = { slots_modelparafile, NULL };
 static const kw_slot_t slots_nloci[] = { { .type = VT_UINT }, { .type = VT_END } };
+static const kw_slot_t *const alts_nloci[] = { slots_nloci, NULL };
 static const kw_slot_t slots_nsample[] = { { .type = VT_UINT, .has_min = 1, .min = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_nsample[] = { slots_nsample, NULL };
 static const kw_slot_t slots_phase[] = { { .type = VT_BOOL, .repeat = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_phase[] = { slots_phase, NULL };
 static const kw_slot_t slots_printlocus[] = { { .type = VT_UINT }, { .type = VT_UINT, .repeat = 1 }, { .type = VT_END } };
-static const kw_slot_t slots_qrates[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .has_max = 1, .max = 1 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_printlocus[] = { slots_printlocus, NULL };
+static const kw_slot_t slots_qrates[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .literal = 1, .has_max = 1, .max = 1 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_qrates[] = { slots_qrates, NULL };
 static const kw_slot_t slots_sampfreq[] = { { .type = VT_UINT, .has_min = 1, .min = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_sampfreq[] = { slots_sampfreq, NULL };
 static const kw_slot_t slots_scaling[] = { { .type = VT_BOOL }, { .type = VT_END } };
+static const kw_slot_t *const alts_scaling[] = { slots_scaling, NULL };
 static const kw_slot_t slots_seed[] = { { .type = VT_INT }, { .type = VT_END } };
+static const kw_slot_t *const alts_seed[] = { slots_seed, NULL };
 static const kw_slot_t slots_seqDates[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_seqDates[] = { slots_seqDates, NULL };
 static const kw_slot_t slots_seqerr[] = { { .type = VT_UINT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_seqerr[] = { slots_seqerr, NULL };
 static const kw_slot_t slots_seqfile[] = { { .type = VT_STRING }, { .type = VT_END } };
-static const kw_slot_t slots_speciesdelimitation[] = { { .type = VT_BOOL }, { .type = VT_INT, .optional = 1 }, { .type = VT_FLOAT, .optional = 1 }, { .type = VT_FLOAT, .optional = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_seqfile[] = { slots_seqfile, NULL };
+static const kw_slot_t slots_speciesdelimitation_0[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .literal = 1, .has_max = 1, .max = 0 }, { .type = VT_END } };
+static const kw_slot_t slots_speciesdelimitation_1[] = { { .type = VT_UINT, .has_min = 1, .min = 1, .literal = 1, .has_max = 1, .max = 1 }, { .type = VT_UINT, .has_min = 1, .min = 0, .literal = 1, .has_max = 1, .max = 0 }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t slots_speciesdelimitation_2[] = { { .type = VT_UINT, .has_min = 1, .min = 1, .literal = 1, .has_max = 1, .max = 1 }, { .type = VT_UINT, .has_min = 1, .min = 1, .literal = 1, .has_max = 1, .max = 1 }, { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_speciesdelimitation[] = { slots_speciesdelimitation_0, slots_speciesdelimitation_1, slots_speciesdelimitation_2, NULL };
+static const char *const forms_speciesdelimitation[] = { "0", "1 0 epsilon", "1 1 alpha m", NULL };
 static const kw_slot_t slots_speciesmodelprior[] = { { .type = VT_UINT, .has_min = 1, .min = 0, .has_max = 1, .max = 3 }, { .type = VT_END } };
+static const kw_slot_t *const alts_speciesmodelprior[] = { slots_speciesmodelprior, NULL };
 static const kw_slot_t slots_speciestree[] = { { .type = VT_BOOL }, { .type = VT_FLOAT, .repeat = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_speciestree[] = { slots_speciestree, NULL };
 static const char *const enum_thetamodel[] = { "linked-none", "linked-all", "linked-inner", "linked-msci", "linked-mscm", NULL };
 static const kw_slot_t slots_thetamodel[] = { { .type = VT_STRING, .enums = enum_thetamodel }, { .type = VT_END } };
+static const kw_slot_t *const alts_thetamodel[] = { slots_thetamodel, NULL };
 static const kw_slot_t slots_threads[] = { { .type = VT_UINT, .has_min = 1, .min = 1 }, { .type = VT_UINT, .optional = 1, .has_min = 1, .min = 1 }, { .type = VT_UINT, .optional = 1, .has_min = 1, .min = 1 }, { .type = VT_END } };
+static const kw_slot_t *const alts_threads[] = { slots_threads, NULL };
 static const kw_slot_t slots_traitfile[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_traitfile[] = { slots_traitfile, NULL };
 static const kw_slot_t slots_treefile[] = { { .type = VT_STRING }, { .type = VT_END } };
+static const kw_slot_t *const alts_treefile[] = { slots_treefile, NULL };
 static const kw_slot_t slots_usedata[] = { { .type = VT_INT, .has_min = 1, .min = 0, .has_max = 1, .max = 2 }, { .type = VT_END } };
+static const kw_slot_t *const alts_usedata[] = { slots_usedata, NULL };
 static const kw_slot_t slots_wprior[] = { { .type = VT_FLOAT }, { .type = VT_FLOAT }, { .type = VT_END } };
+static const kw_slot_t *const alts_wprior[] = { slots_wprior, NULL };
 
 const kw_valuespec_t kw_value_table[] = {
-    { "alphaprior", slots_alphaprior },
-    { "arch", slots_arch },
-    { "basefreqs", slots_basefreqs },
-    { "bayesfactorbeta", slots_bayesfactorbeta },
-    { "burnin", slots_burnin },
-    { "checkpoint", slots_checkpoint },
-    { "cleandata", slots_cleandata },
-    { "concatfile", slots_concatfile },
-    { "constraintfile", slots_constraintfile },
-    { "datefile", slots_datefile },
-    { "debug_migration", slots_debug_migration },
-    { "geneflow", slots_geneflow },
-    { "imapfile", slots_imapfile },
-    { "jobname", slots_jobname },
-    { "loadbalance", slots_loadbalance },
-    { "loci&length", slots_loci_length },
-    { "model", slots_model },
-    { "modelparafile", slots_modelparafile },
-    { "nloci", slots_nloci },
-    { "nsample", slots_nsample },
-    { "phase", slots_phase },
-    { "printlocus", slots_printlocus },
-    { "qrates", slots_qrates },
-    { "sampfreq", slots_sampfreq },
-    { "scaling", slots_scaling },
-    { "seed", slots_seed },
-    { "seqDates", slots_seqDates },
-    { "seqerr", slots_seqerr },
-    { "seqfile", slots_seqfile },
-    { "speciesdelimitation", slots_speciesdelimitation },
-    { "speciesmodelprior", slots_speciesmodelprior },
-    { "speciestree", slots_speciestree },
-    { "thetamodel", slots_thetamodel },
-    { "threads", slots_threads },
-    { "traitfile", slots_traitfile },
-    { "treefile", slots_treefile },
-    { "usedata", slots_usedata },
-    { "wprior", slots_wprior },
-    { NULL, NULL }
+    { "alphaprior", alts_alphaprior, NULL, NULL },
+    { "arch", alts_arch, NULL, NULL },
+    { "basefreqs", alts_basefreqs, NULL, NULL },
+    { "bayesfactorbeta", alts_bayesfactorbeta, NULL, NULL },
+    { "burnin", alts_burnin, NULL, NULL },
+    { "checkpoint", alts_checkpoint, NULL, NULL },
+    { "cleandata", alts_cleandata, NULL, NULL },
+    { "clock", alts_clock, forms_clock, NULL },
+    { "concatfile", alts_concatfile, NULL, NULL },
+    { "constraintfile", alts_constraintfile, NULL, NULL },
+    { "datefile", alts_datefile, NULL, NULL },
+    { "debug_migration", alts_debug_migration, NULL, NULL },
+    { "geneflow", alts_geneflow, NULL, NULL },
+    { "heredity", alts_heredity, forms_heredity, NULL },
+    { "imapfile", alts_imapfile, NULL, NULL },
+    { "jobname", alts_jobname, NULL, NULL },
+    { "loadbalance", alts_loadbalance, NULL, NULL },
+    { "loci&length", alts_loci_length, NULL, NULL },
+    { "locusrate", alts_locusrate, forms_locusrate, NULL },
+    { "model", alts_model, NULL, NULL },
+    { "modelparafile", alts_modelparafile, NULL, NULL },
+    { "nloci", alts_nloci, NULL, NULL },
+    { "nsample", alts_nsample, NULL, NULL },
+    { "phase", alts_phase, NULL, NULL },
+    { "printlocus", alts_printlocus, NULL, NULL },
+    { "qrates", alts_qrates, NULL, NULL },
+    { "sampfreq", alts_sampfreq, NULL, NULL },
+    { "scaling", alts_scaling, NULL, NULL },
+    { "seed", alts_seed, NULL, NULL },
+    { "seqDates", alts_seqDates, NULL, NULL },
+    { "seqerr", alts_seqerr, NULL, NULL },
+    { "seqfile", alts_seqfile, NULL, NULL },
+    { "speciesdelimitation", alts_speciesdelimitation, forms_speciesdelimitation, "1 0 2" },
+    { "speciesmodelprior", alts_speciesmodelprior, NULL, NULL },
+    { "speciestree", alts_speciestree, NULL, NULL },
+    { "thetamodel", alts_thetamodel, NULL, NULL },
+    { "threads", alts_threads, NULL, NULL },
+    { "traitfile", alts_traitfile, NULL, NULL },
+    { "treefile", alts_treefile, NULL, NULL },
+    { "usedata", alts_usedata, NULL, NULL },
+    { "wprior", alts_wprior, NULL, NULL },
+    { NULL, NULL, NULL, NULL }
 };

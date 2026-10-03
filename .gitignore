@@ -69,3 +69,4 @@ mac-app/dist/
 
 # Emacs byte-compiled artifacts (emacs/)
 *.elc
+/bpp-lint-debug

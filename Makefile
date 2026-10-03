@@ -26,7 +26,7 @@ PYTHON  ?= python3
 SRCS := $(wildcard $(SRCDIR)/*.c)
 OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRCS))
 
-.PHONY: all clean test install gen check-gen
+.PHONY: all clean test install gen check-gen debug
 
 all: $(BIN)
 
@@ -55,10 +55,21 @@ $(OBJDIR):
 	mkdir -p $(OBJDIR)
 
 clean:
-	rm -rf $(OBJDIR) $(BIN)
+	rm -rf $(OBJDIR) build $(BIN) bpp-lint-debug
 
 test: $(BIN) check-gen
 	@./tests/run.sh
+
+# Sanitizer build: compiles into build/debug, links bpp-lint-debug with
+# ASan + UBSan, and runs the whole test suite against it. Any report from the
+# sanitizers (printed to stderr) must be treated as a failure.
+DEBUG_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes \
+                -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined \
+                -fno-sanitize-recover=undefined
+debug:
+	$(MAKE) BIN=bpp-lint-debug OBJDIR=build/debug \
+	        CFLAGS="$(DEBUG_CFLAGS)" LDFLAGS="-fsanitize=address,undefined" all
+	@BPP_LINT_BIN=$(CURDIR)/bpp-lint-debug ./tests/run.sh
 
 install: $(BIN)
 	install -m 0755 $(BIN) $(DESTDIR)$(PREFIX)/bin/$(BIN)

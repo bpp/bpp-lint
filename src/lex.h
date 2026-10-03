@@ -63,6 +63,9 @@ char *bpp_strdup_lower(const char *s);
 /* Allocate a plain duplicate of s. */
 char *bpp_strdup(const char *s);
 
+/* printf into a freshly malloc'd string (NULL on allocation failure). */
+char *bpp_asprintf(const char *fmt, ...);
+
 /* Levenshtein distance between a and b (case-insensitive). */
 int  bpp_levenshtein(const char *a, const char *b);
 
